@@ -1,7 +1,7 @@
 """Resumable whole-history scan: cheap pass first, then queued public metadata."""
 import json,re,time
 from collections import defaultdict
-import core,recognition,bulk_recognition,original_metadata,music_metadata,song_databases,pipeline
+import core,recognition,bulk_recognition,original_metadata,music_metadata,song_databases,pipeline,non_song
 
 VERSION='whole-metadata-v1'
 
@@ -21,6 +21,7 @@ def references(db,video,write_lock):
             core.save_video(db,latest);db.commit()
 
 def potential(video,result):
+    if non_song.valid(video):return False
     raw=video.get('title') or video.get('history_title','')
     return (video.get('metadata_status')=='pending' or video.get('classification',{}).get('status')=='review' or
             bulk_recognition.music_evidence(video,result) or
@@ -57,9 +58,9 @@ def run(db,load_key,write_lock,stop):
     videos={r['id']:json.loads(r['data']) for r in db.execute('SELECT id,data FROM videos')}
     history={r['video_id']:r['n'] for r in db.execute('SELECT video_id,COUNT(*) n FROM events WHERE video_id IS NOT NULL GROUP BY video_id')}
     edits=core.get_state(db,'corrections',{},'user_state')
-    targets=[v for v in history if v in videos and v not in edits and videos[v].get('classification',{}).get('status') not in ('song','excluded')]
+    targets=[v for v in history if v in videos and v not in edits and videos[v].get('classification',{}).get('status') not in ('song','excluded','non_song')]
     with write_lock:
-        for vid in targets:db.execute('INSERT INTO whole_scan_tasks VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,stage=excluded.stage,data=excluded.data WHERE whole_scan_tasks.version<>excluded.version',(vid,VERSION,'local','{}'))
+        for vid in targets:db.execute('INSERT INTO whole_scan_tasks VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,stage=excluded.stage,data=excluded.data WHERE whole_scan_tasks.version<>excluded.version OR whole_scan_tasks.stage="non_song"',(vid,VERSION,'local','{}'))
         db.commit()
     catalogue=defaultdict(list)
     for row in db.execute('SELECT data FROM catalogue'):
@@ -78,6 +79,8 @@ def run(db,load_key,write_lock,stop):
             current_edits=core.get_state(db,'corrections',{},'user_state')
             for vid,result,stage in pending:
                 v=core.video_data(db,vid)
+                if v.get('classification',{}).get('status')=='non_song' and non_song.valid(v):
+                    stage='non_song';result={'status':'non_song','candidates':[],'reason':v['non_song']['reason']}
                 if vid in current_edits or v.get('classification',{}).get('status') in ('song','excluded'):
                     stage='protected';result={'status':'skipped','reason':'기존 결정 유지','candidates':[]}
                 elif result['status']=='recognized':
@@ -89,7 +92,7 @@ def run(db,load_key,write_lock,stop):
             if rebuild:core.rebuild(db)
             counts=dict(db.execute('SELECT stage,COUNT(*) FROM whole_scan_tasks WHERE version=? GROUP BY stage',(VERSION,)).fetchall())
             state.update(done=sum(n for s,n in counts.items() if s not in ('local','deep')),local_remaining=counts.get('local',0),deep_remaining=counts.get('deep',0),
-                         saved=counts.get('saved',0),candidates=counts.get('candidate',0),unresolved=counts.get('unresolved',0),no_music_evidence=counts.get('no_music_evidence',0),errors=counts.get('error',0),updated_at=time.time())
+                         saved=counts.get('saved',0),candidates=counts.get('candidate',0),unresolved=counts.get('unresolved',0),non_song=counts.get('non_song',0),no_music_evidence=counts.get('no_music_evidence',0),errors=counts.get('error',0),updated_at=time.time())
             core.set_state(db,'recognition_job',state);db.commit()
         if rebuild:index_tracks()
     def local(v):
@@ -107,7 +110,12 @@ def run(db,load_key,write_lock,stop):
             v=videos[vid]
             try:
                 result=resolve(v,local(v))
-                if result['status']=='recognized' and bulk_recognition.music_evidence(v,result):stage='saved'
+                verdict=non_song.decide(v,result) if result['status']!='recognized' else None
+                if verdict:
+                    with write_lock:
+                        current=core.video_data(db,vid);current['non_song']=verdict;core.save_video(db,current);db.commit()
+                    result={'status':'non_song','candidates':[],'reason':verdict['reason']};stage='non_song'
+                elif result['status']=='recognized' and bulk_recognition.music_evidence(v,result):stage='saved'
                 else:
                     stage='deep' if potential(v,result) else 'no_music_evidence'
                     if stage=='no_music_evidence':result={'status':'unresolved','candidates':[],'reason':'자동 판별에서 음악 근거 없음 — 비음악으로 확정한 것은 아님'}
@@ -122,12 +130,22 @@ def run(db,load_key,write_lock,stop):
             for vid in sorted(deep_ids,key=lambda x:-history.get(x,0)):
                 if stop.is_set():break
                 v=core.video_data(db,vid);state['current_title']=v.get('title') or v.get('history_title','');flush()
+                if non_song.valid(v):
+                    pending.append((vid,{'status':'non_song','candidates':[],'reason':v['non_song']['reason']},'non_song'));flush();continue
                 try:
                     if v.get('classification',{}).get('status') in ('song','excluded'):
                         result={'status':'skipped','candidates':[]};stage='protected'
                     else:
                         original_metadata.ensure_originals(db,v,load_key(),write_lock)
                         music_metadata.ensure(db,v,write_lock);v=core.video_data(db,vid);videos[vid]=v
+                        verdict=non_song.decide(v,local(v))
+                        if verdict:
+                            with write_lock:
+                                current=core.video_data(db,vid)
+                                if non_song.fingerprint(current)==verdict['fingerprint']:
+                                    current['non_song']=verdict;current['classification']=core.classify(current,correction=core.get_state(db,'corrections',{},'user_state').get(vid));core.save_video(db,current);db.commit()
+                            if non_song.valid(current):
+                                pending.append((vid,{'status':'non_song','candidates':[],'reason':verdict['reason']},'non_song'));flush();continue
                         if not load_key():references(db,v,write_lock)
                         for link in recognition.original_links(v.get('description','')):videos[link['video_id']]=core.video_data(db,link['video_id'])
                         for card in v.get('music_metadata',{}).get('cards',[]):

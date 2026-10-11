@@ -39,3 +39,4 @@
 .recommendation-row .song-actions>.karaoke-feedback{grid-column:2 / -1;justify-self:end;justify-content:flex-end}
 .review-row .review-registration{color:#285936;font-weight:600;background:#deeddf;padding:6px 10px;border-radius:6px;display:inline-block;}
 .linked-video-row{gap:16px;align-items:flex-start}.linked-video-row>a{flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.6}.linked-video-row>button{flex-shrink:0}
+.recognition-excluded{background:#e9ece7;color:#596351;border:1px solid #bac3b2}

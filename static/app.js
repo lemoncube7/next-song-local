@@ -81,7 +81,7 @@ function artists(){
 function queueView(){const oldBrand=brand;brand='all';const list=filtered({queue:true});const html=intro('READY TO SING','오늘의 부를 목록.','추천에서 담아둔 노래를 여기서 확인하세요. 목록은 다시 열어도 남아 있어요.')+`<div class="section-head"><h2>${list.length}곡 담았어요</h2><a class="button outline" href="/api/export" download="karaoke-queue.csv">CSV 저장 ↓</a></div>`+(list.length?rows(list):empty('아직 담은 노래가 없어요.','추천곡 옆의 + 버튼으로 첫 곡을 담아보세요.'));brand=oldBrand;return html;}
 function reviewView(){
   return intro('FIND YOUR SONGS','내 기록에서 노래를 모아요.','남은 영상 전체를 자동 처리하고, 근거가 맞는 곡을 저장해요.')+wholeRecognitionSummary()+
-    `<div class="toolbar"><select id="review-status" aria-label="확인할 영상 분류">${[['review','음악 관련 후보'],['unknown','정보 미확인'],['other','다른 분야의 영상'],['excluded','직접 제외한 영상'],['all','모든 영상']].map(([k,v])=>`<option value="${k}" ${reviewStatus===k?'selected':''}>${v}</option>`).join('')}</select><select id="review-sort" aria-label="확인할 영상 정렬"><option value="frequency" ${reviewSort==='frequency'?'selected':''}>많이 들은 순</option><option value="recent" ${reviewSort==='recent'?'selected':''}>최신순</option></select><input class="search" id="review-search" placeholder="영상 제목이나 채널 검색" aria-label="영상 검색" value="${esc(reviewQuery)}"></div><details class="panel"><summary>시청 횟수와 범위를 골라 확인하기</summary>${bulkRecognitionPanel()}</details><div id="review-results" class="loading">영상을 불러오는 중…</div>`;
+    `<div class="toolbar"><select id="review-status" aria-label="확인할 영상 분류">${[['review','음악 관련 후보'],['unknown','정보 미확인'],['other','다른 분야의 영상'],['excluded','직접 제외한 영상'],['non_song','자동 판정: 곡 영상 아님'],['all','모든 영상']].map(([k,v])=>`<option value="${k}" ${reviewStatus===k?'selected':''}>${v}</option>`).join('')}</select><select id="review-sort" aria-label="확인할 영상 정렬"><option value="frequency" ${reviewSort==='frequency'?'selected':''}>많이 들은 순</option><option value="recent" ${reviewSort==='recent'?'selected':''}>최신순</option></select><input class="search" id="review-search" placeholder="영상 제목이나 채널 검색" aria-label="영상 검색" value="${esc(reviewQuery)}"></div><details class="panel"><summary>시청 횟수와 범위를 골라 확인하기</summary>${bulkRecognitionPanel()}</details><div id="review-results" class="loading">영상을 불러오는 중…</div>`;
 }
 async function loadReview(){
   const version=++reviewVersion;
@@ -98,7 +98,7 @@ async function loadReview(){
     }
   }catch(e){if($('#review-results'))$('#review-results').textContent=e.message;}
 }
-function jobLabel(job){const stages={metadata:'공개 페이지 조회',official_metadata:'공식 API 영상 조회',catalogue_artists:'아티스트별 곡 목록 조회',catalogue_titles:'곡명별 번호 조회',catalogue_complete:'노래방 번호 연결 완료',complete:'처리 완료'};return stages[job.stage]||'대기 중';}
+function jobLabel(job){const stages={metadata:'공개 페이지 조회',official_metadata:'공식 API 영상 조회',catalogue_artists:'아티스트별 곡 목록 조회',catalogue_titles:'곡명별 번호 조회',catalogue_complete:'노래방 번호 연결 완료',complete:'처리 완료',non_song:'곡 아닌 영상 정리'};return stages[job.stage]||'대기 중';}
 function dataView(){
   const s=S.stats,job=s.job||{},running=job.status==='running',percent=job.total?Math.min(100,100*(job.done||0)/job.total):0;
   const statsHTML=`<div class="kv"><span>가져온 활동</span><b>${count(s.records)}건</b></div><div class="kv"><span>고유 영상</span><b>${count(s.videos)}개</b></div><div class="kv"><span>게시글 등 영상 외 활동</span><b>${count(s.nonvideo_records)}건</b></div><div class="kv"><span>곡으로 연결한 영상</span><b>${count(s.song_videos)}개 / ${count(s.tracks)}곡</b></div><div class="kv"><span>음악 관련 확인 대기</span><b>${count(s.review)}개</b></div><div class="kv"><span>음악 여부 미확인</span><b>${count(s.unknown)}개</b></div><div class="kv"><span>확보한 노래방 목록</span><b>${count(s.catalogue_rows)}항목</b></div><div class="kv"><span>노래방 검색 보류</span><b>${count(s.catalogue_query_statuses?.deferred)}건</b></div>`;
@@ -177,6 +177,9 @@ function syncRecognitionState(){
   },300);
 }
 function paintRecognitionButton(button,result){
+  if(result.status==='non_song'){
+    button.className='button recognition-excluded';button.textContent='곡 영상 아님';button.title=result.reason||'';button.disabled=false;button.dataset.action='recognition-result';return;
+  }
   button.classList.remove('primary','recognition-candidate','recognition-direct','recognition-web','recognition-saved');
   const saved=result.status==='recognized';
   const state=saved?'saved':result.candidates?.length?'candidate':result.google?'web':'direct';
@@ -426,7 +429,7 @@ function startReversePoll(){
 let wholeSavedSeen=-1;
 function wholePanelContent(){
   const j=S.recognition_job||{},active=j.status==='running',current=j.engine==='whole-metadata-v1';
-  return `<h3>남은 영상 전체에서 음악 추출</h3><p class="small muted">시청 횟수·위의 분류 선택과 관계없이 모든 미등록 영상을 자동 판별해요. 빠른 전체 판별 후 음악 근거가 있는 영상의 음악 정보·원곡 링크·음악 DB를 조회하고, 일치하는 곡을 저장해요. 직접 수정·제외한 영상은 유지해요. 화면을 닫아도 서버가 켜져 있으면 계속 진행하며 서버 재시작 시 진행 중이던 작업을 이어가요.</p><div class="dialog-actions"><button class="button primary" data-action="whole-start" ${active?'disabled':''}>${current&&j.status!=='complete'?'전체 처리 이어가기':'남은 영상 전체 자동 처리'}</button><button class="button outline" data-action="whole-stop" ${active?'':'disabled'}>전체 처리 중지</button></div>${current?`<p class="note">${{running:'진행 중',complete:'완료',stopped:'중지됨',error:'오류'}[j.status]||'대기'} · ${j.stage==='local'?'전체 로컬 판별':'음악 메타데이터 확인'}<br>처리 완료 ${count(j.done)} / ${count(j.total)} · 로컬 판별 대기 ${count(j.local_remaining)} · 추가 조회 대기 ${count(j.deep_remaining)}<br>자동 저장 ${count(j.saved)} · 후보 ${count(j.candidates)} · 음악 근거 없음 ${count(j.no_music_evidence)} · 곡 정보 미확인 ${count(j.unresolved)} · 오류 ${count(j.errors)}${j.current_title?`<br>현재: ${esc(j.current_title)}`:''}${j.reason?`<br>${esc(j.reason)}`:''}</p>`:'<p class="small muted">기존 전체 확인 결과도 최신 인식 로직으로 다시 검사해요. 사람이 후보를 하나씩 선택할 필요 없이 처리합니다.</p>'}`;
+  return `<h3>남은 영상 전체에서 음악 추출</h3><p class="small muted">시청 횟수·위의 분류 선택과 관계없이 모든 미등록 영상을 자동 판별해요. 빠른 전체 판별 후 음악 근거가 있는 영상의 음악 정보·원곡 링크·음악 DB를 조회하고, 일치하는 곡을 저장해요. 직접 수정·제외한 영상은 유지해요. 화면을 닫아도 서버가 켜져 있으면 계속 진행하며 서버 재시작 시 진행 중이던 작업을 이어가요.</p><div class="dialog-actions"><button class="button primary" data-action="whole-start" ${active?'disabled':''}>${current&&j.status!=='complete'?'전체 처리 이어가기':'남은 영상 전체 자동 처리'}</button><button class="button outline" data-action="whole-stop" ${active?'':'disabled'}>전체 처리 중지</button><button class="button outline" data-action="job" data-kind="non_song">곡 아닌 영상 정리</button></div>${current?`<p class="note">${{running:'진행 중',complete:'완료',stopped:'중지됨',error:'오류'}[j.status]||'대기'} · ${j.stage==='local'?'전체 로컬 판별':'음악 메타데이터 확인'}<br>처리 완료 ${count(j.done)} / ${count(j.total)} · 로컬 판별 대기 ${count(j.local_remaining)} · 추가 조회 대기 ${count(j.deep_remaining)}<br>자동 저장 ${count(j.saved)} · 후보 ${count(j.candidates)} · 곡 영상 아님 ${count(j.non_song)} · 음악 근거 없음 ${count(j.no_music_evidence)} · 곡 정보 미확인 ${count(j.unresolved)} · 오류 ${count(j.errors)}${j.current_title?`<br>현재: ${esc(j.current_title)}`:''}${j.reason?`<br>${esc(j.reason)}`:''}</p>`:'<p class="small muted">기존 전체 확인 결과도 최신 인식 로직으로 다시 검사해요. 사람이 후보를 하나씩 선택할 필요 없이 처리합니다.</p>'}`;
 }
 function updateWholePanel(){const panel=$('#whole-scan-panel');if(panel)panel.innerHTML=wholePanelContent();}
 function startWholePoll(){
@@ -436,6 +439,7 @@ function startWholePoll(){
     catch(e){clearInterval(wholePollTimer);wholePollTimer=null;toast(e.message);}
   },4000);
 }
+
 
 
 

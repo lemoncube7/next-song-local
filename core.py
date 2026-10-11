@@ -188,6 +188,8 @@ def classify(video, library=None, correction=None, shared=None):
         return {'status':'song','title':title,'artist':canonical(channel[:-8]),'source':'topic','reason':'음원 Topic 채널의 제목·아티스트'}
     ordinary=regular_song(video)
     if ordinary:return ordinary
+    import non_song
+    if non_song.valid(video):return {'status':'non_song','source':'automatic_non_song','reason':video['non_song']['reason']}
     signals=bool(re.search(r'(?i)\bofficial\s+(?:music\s+)?video\b|\bofficial\s+mv\b|\blyric\s+video\b|\bcover\b|歌ってみた|歌枠|作詞|作曲|デモソング|music video|뮤직비디오|커버|가사|노래',title+'\n'+desc[:1800]))
     if video.get('category')=='Music' or signals:
         return {'status':'review','reason':'음악 관련 영상 — 곡 정보 확인 필요'}
@@ -307,7 +309,7 @@ def stats(db):
         'videos':len(video_rows),'nonvideo_records':db.execute('SELECT COUNT(*) FROM events WHERE video_id IS NULL').fetchone()[0],
         'tracks':len(items),'numbered_tracks':sum(bool(t['numbers']) for t in items),
         'review':counts.get('review',0),'unknown':counts.get('unknown',0),'other':counts.get('other',0),
-        'excluded':counts.get('excluded',0),'song_videos':counts.get('song',0),
+        'excluded':counts.get('excluded',0),'non_song':counts.get('non_song',0),'song_videos':counts.get('song',0),
         'metadata_done':sum(v.get('metadata_status') in ('ok','unavailable','error') for v in video_rows),
         'metadata_errors':sum(v.get('metadata_status')=='error' for v in video_rows),
         'official_checked':sum(bool(v.get('api_checked')) for v in video_rows),

@@ -2,7 +2,7 @@
 import argparse, csv, io, json, secrets, threading, traceback, urllib.parse, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import core, pipeline, recognition, song_identity, song_search, google_search, original_metadata, bulk_recognition, music_metadata, song_databases, user_backup, whole_recognition, reverse_catalogue, github_sync, catalogue_import
+import core, pipeline, recognition, song_identity, song_search, google_search, original_metadata, bulk_recognition, music_metadata, song_databases, user_backup, whole_recognition, reverse_catalogue, github_sync, catalogue_import, non_song
 
 TOKEN=secrets.token_urlsafe(32)
 JOB_LOCK=threading.Lock()
@@ -35,6 +35,10 @@ def run_job(kind):
                 else:pipeline.enrich(db,workers=4,retry=True)
             elif kind=='catalogue':pipeline.karaoke(db)
             elif kind=='full_catalogue':catalogue_import.run(db,WRITE_LOCK)
+            elif kind=='non_song':
+                with WRITE_LOCK:core.set_state(db,'job',{'status':'running','stage':'non_song'});db.commit()
+                result=non_song.reconcile(db,WRITE_LOCK)
+                with WRITE_LOCK:core.set_state(db,'job',{'status':'complete','stage':'non_song','done':result['new_non_song'],'total':result['new_non_song']});db.commit()
             core.rebuild(db);pipeline.export(db)
         except Exception as exc:
             core.set_state(db,'job',{'status':'error','stage':kind,'reason':type(exc).__name__});db.commit()
@@ -74,6 +78,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get('X-App-Token')!=TOKEN:return self.send({'error':'요청 인증 실패'},403)
                 return self.send(user_backup.export(db),extra={'Content-Disposition':'attachment; filename="karaoke-decisions.json"'})
             if path=='/api/recognition-job':return self.send(core.get_state(db,'recognition_job',{'status':'idle'}))
+            if path=='/api/non-song-status':return self.send(core.get_state(db,'non_song_job',{}))
             if path=='/api/merge-candidates':return self.send({'candidates':song_identity.candidates(db),'history':core.get_state(db,'merge_history',[],'user_state'),'different':list(core.get_state(db,'different_songs',{},'user_state').values())})
             if path=='/api/stats':return self.send(core.stats(db))
             if path=='/api/recognition-targets':
@@ -86,7 +91,7 @@ class Handler(BaseHTTPRequestHandler):
                 retry=q.get('retry',['1'])[0]=='1';skipped=0
                 for row in db.execute('SELECT data FROM videos'):
                     v=json.loads(row[0]);c=v.get('classification',{});vid=v['video_id']
-                    if vid not in history or c.get('status')=='song':continue
+                    if vid not in history or c.get('status') in ('song','non_song'):continue
                     if status!='all' and c.get('status')!=status:continue
                     if search and search not in ((v.get('title') or v.get('history_title',''))+' '+(v.get('channel') or v.get('history_channel',''))).casefold():continue
                     old=checked.get(vid,{})
@@ -103,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
                 result=[]
                 for row in db.execute('SELECT data FROM videos'):
                     v=json.loads(row[0]);c=v.get('classification',{})
-                    if v['video_id'] not in history or c.get('status')=='song':continue
+                    if v['video_id'] not in history or c.get('status')=='song' or (c.get('status')=='non_song' and status!='non_song'):continue
                     if status!='all' and c.get('status')!=status:continue
                     if search and search not in ((v.get('title') or v.get('history_title',''))+' '+(v.get('channel') or v.get('history_channel',''))).casefold():continue
                     activity=history.get(v['video_id'],{})
@@ -312,7 +317,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send({'has_api_key':bool(load_key())})
                 if path=='/api/job':
                     kind=payload.get('kind')
-                    if kind not in ('metadata','catalogue','full_catalogue'):raise ValueError('잘못된 작업입니다.')
+                    if kind not in ('metadata','catalogue','full_catalogue','non_song'):raise ValueError('잘못된 작업입니다.')
                     if core.get_state(db,'job',{}).get('status')=='running' or not run_job(kind):return self.send({'error':'이미 조회 중입니다.'},409)
                     return self.send({'started':True})
             return self.send({'error':'Not found'},404)
