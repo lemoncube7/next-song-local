@@ -4,7 +4,7 @@ from pathlib import Path
 import core
 
 FORMAT='next-song-classifications'
-DEFAULT_REPO='lemoncube7/next-song-classifications'
+DEFAULT_REPO=''
 SYNC_LOCK=threading.Lock()
 AUTH_STATE={'status':'idle'}
 AUTH_LOCK=threading.Lock()

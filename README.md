@@ -14,8 +14,8 @@ YouTube와 YouTube Music의 시청 기록에서 익숙한 곡을 찾고 TJ·금�
 7. 본인의 Google Takeout 시청 기록 ZIP·JSON·HTML을 가져옵니다. 공유된 영상 ID는 조사 없이 먼저 연결됩니다.
 8. **곡 확인하기 → 남은 영상 전체 자동 처리**를 실행하면 새로운 곡을 찾아 저장합니다. 공유를 켜 두면 30분마다 결과를 주고받습니다.
 
-기존 공유 저장소는 `lemoncube7/next-song-classifications`이며 초대된 사람만 접근합니다.
-[초대 확인](https://github.com/lemoncube7/next-song-classifications/invitations)
+모임 관리자가 알려준 비공개 저장소 주소(owner/name)를 입력하세요. 초대된 사람만 접근합니다.
+[초대 알림 확인](https://github.com/notifications)
 다른 그룹은 자기 비공개 저장소를 만들고 README 등 최초 커밋을 하나 넣은 뒤 저장소 주소를 변경할 수 있습니다.
 
 ## 시청 기록 준비
