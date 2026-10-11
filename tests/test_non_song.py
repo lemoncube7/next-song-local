@@ -14,7 +14,7 @@ class NonSongTests(unittest.TestCase):
 
     def test_music_rhythm_and_original_links_are_protected(self):
         base={'category':'Gaming','metadata_status':'ok'}
-        for title in ['Minecraft piano cover','[Arcaea] Song feat. 初音ミク','Minecraftで 原曲 cover','実況で歌ってみた']:
+        for title in ['Minecraft piano cover','[Arcaea] Song feat. 初音ミク','Minecraftで 原曲 cover','実況で歌ってみた','겨울 BGM #minecraft','Phigros Phi Gameplay']:
             self.assertIsNone(non_song.decide({**base,'title':title}))
         self.assertIsNone(non_song.decide({**base,'title':'Minecraft gameplay','description':'Original: https://youtu.be/abcdefghijk'}))
         self.assertIsNone(non_song.decide({**base,'title':'Minecraft gameplay'}, {'candidates':[{'title':'Minecraft','confident':True}]}))

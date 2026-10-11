@@ -2,7 +2,7 @@
 import hashlib,json,re,time
 
 VERSION='non-song-v1'
-MUSIC=r'(?i)歌ってみた|歌枠|歌配信|cover|커버|노래|가사|歌詞|lyrics?|\bMV\b|music video|뮤직비디오|remix|\bOST\b|feat\.?|\bft\.|演奏|연주|ピアノ|piano|악보|楽譜|\bsolo\b|オリジナル曲|original song|demo song|デモソング|初音ミク|GUMI|重音テト|可不|鏡音|flower|音ゲー|bemani|arcaea|\bosu\b|리듬게임|歌唱'
+MUSIC=r'(?i)歌ってみた|歌枠|歌配信|cover|커버|노래|가사|음악|音楽|原曲|歌詞|lyrics?|\bMV\b|オリジナルMV|\bmusic\b|\bsong\b|\bbgm\b|soundtrack|뮤직비디오|remix|\bOST\b|feat\.?|\bft\.|演奏|연주|ピアノ|piano|악보|楽譜|\bsolo\b|オリジナル曲|demo song|デモソング|初音ミク|GUMI|重音テト|可不|鏡音|flower|音ゲー|bemani|arcaea|phigros|\bosu\b|리듬게임|歌唱'
 
 def fingerprint(v):
     fields={k:v.get(k) for k in ('title','history_title','channel','history_channel','description','category','metadata_status')}
@@ -11,7 +11,7 @@ def fingerprint(v):
 
 def valid(v):
     d=v.get('non_song',{})
-    return d.get('version')==VERSION and d.get('fingerprint')==fingerprint(v)
+    return d.get('version')==VERSION and d.get('fingerprint')==fingerprint(v) and not re.search(MUSIC,v.get('title') or v.get('history_title',''))
 
 def decide(v,result=None):
     import core,recognition
@@ -39,16 +39,22 @@ def decide(v,result=None):
 def reconcile(db,write_lock):
     import core
     rows=db.execute('SELECT v.id,v.data,r.data result FROM videos v LEFT JOIN recognition_results r ON r.id=v.id WHERE EXISTS(SELECT 1 FROM events e WHERE e.video_id=v.id)').fetchall()
-    counts={};changed=0;pending=[]
+    counts={};changed=0;revoked=0;pending=[]
     edits=core.get_state(db,'corrections',{},'user_state')
     def flush():
-        nonlocal changed
+        nonlocal changed,revoked
         with write_lock:
             current=core.get_state(db,'corrections',{},'user_state')
             has_tasks=db.execute("SELECT 1 FROM sqlite_master WHERE name='whole_scan_tasks'").fetchone()
             for vid,d in pending:
                 v=core.video_data(db,vid)
                 if vid in current or v.get('classification',{}).get('status') in ('song','excluded'):continue
+                if d is None:
+                    if valid(v):continue
+                    v.pop('non_song',None);v['classification']=core.classify(v);core.save_video(db,v)
+                    db.execute('DELETE FROM recognition_results WHERE id=? AND json_extract(data,?)=?',(vid,'$.status','non_song'))
+                    if has_tasks:db.execute('UPDATE whole_scan_tasks SET stage=?,data=? WHERE id=? AND stage=?',('deep','{}',vid,'non_song'))
+                    revoked+=1;continue
                 if d['fingerprint']!=fingerprint(v):continue
                 v['non_song']=d;v['classification']={'status':'non_song','source':'automatic_non_song','reason':d['reason']};core.save_video(db,v)
                 result={'status':'non_song','reason':d['reason'],'candidates':[],'rule':d['rule']}
@@ -58,14 +64,16 @@ def reconcile(db,write_lock):
             db.commit();pending.clear()
     for row in rows:
         v=json.loads(row['data'])
-        if row['id'] in edits or v.get('classification',{}).get('status') in ('song','excluded','non_song'):continue
+        if row['id'] in edits or v.get('classification',{}).get('status') in ('song','excluded'):continue
+        if v.get('classification',{}).get('status')=='non_song' and valid(v):continue
         result=json.loads(row['result']) if row['result'] else {}
         d=decide(v,result)
         if d:pending.append((row['id'],d))
+        elif v.get('non_song') and not valid(v):pending.append((row['id'],None))
         if len(pending)>=500:flush()
     flush()
     with write_lock:
         core.rebuild(db)
-        report={'status':'complete','new_non_song':changed,'rules':counts,'version':VERSION,'finished_at':time.time()}
+        report={'status':'complete','new_non_song':changed,'revoked':revoked,'rules':counts,'version':VERSION,'finished_at':time.time()}
         core.set_state(db,'non_song_job',report);db.commit()
     return report

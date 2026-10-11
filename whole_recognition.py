@@ -25,6 +25,7 @@ def potential(video,result):
     raw=video.get('title') or video.get('history_title','')
     return (video.get('metadata_status')=='pending' or video.get('classification',{}).get('status')=='review' or
             bulk_recognition.music_evidence(video,result) or
+            bool(re.search(non_song.MUSIC,raw)) or
             bool(re.search(r'(?i)歌ってみた|cover|커버|가사|lyrics|lyric video|歌詞|remix|ピアノ|piano|\bfeat\.|\bft\.',raw)))
 
 def resolve(video,result):
