@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>다음 곡 · 내 기록에서 찾는 노래</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<aside class="sidebar">
+  <a class="brand" href="#recommend"><span class="brandmark">♪</span><span>다음 곡<small>YOUR NEXT SONG</small></span></a>
+  <div class="nav-caption">내 노래 서랍</div>
+  <nav aria-label="주 메뉴">
+    <button class="nav active" data-view="recommend"><span>◈</span> 오늘의 추천</button>
+    <button class="nav" data-view="songs"><span>♫</span> 기록 속 노래 <b id="nav-songs">—</b></button>
+    <button class="nav" data-view="artists"><span>♡</span> 아티스트</button>
+    <button class="nav" data-view="queue"><span>≡</span> 부를 목록 <b id="nav-queue">0</b></button>
+    <button class="nav" data-view="review"><span>◇</span> 곡 확인하기</button>
+    <button class="nav" data-view="merge"><span>⇄</span> 같은 곡 정리</button>
+  </nav>
+  <div class="sidebar-bottom"><button class="nav" data-view="data"><span>↥</span> 데이터 가져오기</button><div class="local-badge"><i></i> 이 PC에 저장됨</div><p>들었던 노래를<br>다시 부를 순간.</p></div>
+</aside>
+<main>
+  <header class="topbar"><div id="breadcrumb">내 노래 서랍 <span>/</span> 오늘의 추천</div><div class="top-actions"><span class="source-pill">YouTube + Music</span><button id="import-shortcut" class="button subtle">기록 가져오기 ↗</button></div></header>
+  <div id="main-content" aria-live="polite"></div>
+</main>
+<aside class="queue-panel"><div class="queue-title"><span>오늘 부를 목록</span><span id="queue-count">0</span></div><p class="muted small">마음에 드는 곡을 담아두세요.</p><div id="queue-mini"></div><button id="show-queue" class="button outline full">목록 펼치기 ↗</button><div class="queue-foot">번호는 TJ · 금영 기준<br>노래방 기기에 따라 수록 여부가 달라요.</div></aside>
+<dialog id="detail-dialog"><div id="detail-content"></div></dialog>
+<dialog id="review-dialog"><form id="review-form"><div class="dialog-head"><div><span class="eyebrow">곡 정보 확인</span><h2 id="review-heading">이 영상은 어떤 곡인가요?</h2></div><button type="button" class="icon-button" data-close="review-dialog" aria-label="닫기">×</button></div><p id="review-original" class="muted"></p><div id="review-description" class="description-box"></div><p id="recognition-result" class="small muted"></p><div id="recognition-candidates" class="recognition-candidates"></div><input type="hidden" id="review-video-id"><label class="field">곡명<input id="review-title" required maxlength="300"></label><label class="field">아티스트<input id="review-artist" required maxlength="300"></label><div class="dialog-actions"><button type="button" id="review-recognize" class="button outline">알아서 확인해라</button><button type="button" id="review-web-search" class="button outline">Google 전문 검색</button><button type="button" id="review-exclude" class="button subtle">추천에서 제외</button><button type="button" id="review-reset" class="button subtle">수정 되돌리기</button><button type="submit" class="button primary">곡으로 저장</button></div><p class="small muted">저장한 정보는 이 PC에 남고, 이후 가져오기에도 유지돼요.</p></form></dialog>
+<dialog id="merge-dialog"><div class="dialog-head"><h2>같은 곡 연결</h2><button class="icon-button" data-close="merge-dialog" aria-label="닫기">×</button></div><p id="merge-origin"></p><input type="hidden" id="merge-source"><label class="field">연결 대상 검색<input id="merge-query" placeholder="다른 제목 또는 아티스트"></label><label class="field">대표 곡<select id="merge-target"></select></label><p class="small muted">위 곡의 기록을 선택한 대표 곡으로 합쳐요. 다른 가수의 커버나 별도 버전인지 확인해 주세요. 부를 목록·숨김·직접 입력한 번호도 연결되며, 같은 곡 정리에서 되돌릴 수 있어요.</p><button id="merge-save" class="button primary" data-action="merge-save">같은 곡으로 연결</button></dialog>
+<div id="toast" role="status"></div>
+<script src="/app.js"></script>
+</body></html>

@@ -1,0 +1,13 @@
+data/
+__pycache__/
+*.pyc
+*.log
+.env*
+tools/
+build/
+dist/
+*.spec
+*.sqlite*
+*.db
+*.zip
+*.exe
