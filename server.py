@@ -2,7 +2,7 @@
 import argparse, csv, io, json, secrets, threading, traceback, urllib.parse, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import core, pipeline, recognition, song_identity, song_search, google_search, original_metadata, bulk_recognition, music_metadata, song_databases, user_backup, whole_recognition, reverse_catalogue, github_sync, catalogue_import, non_song
+import core, pipeline, recognition, song_identity, song_search, google_search, original_metadata, bulk_recognition, music_metadata, song_databases, user_backup, whole_recognition, reverse_catalogue, github_sync, catalogue_import, non_song, video_kind
 
 TOKEN=secrets.token_urlsafe(32)
 JOB_LOCK=threading.Lock()
@@ -39,6 +39,10 @@ def run_job(kind):
                 with WRITE_LOCK:core.set_state(db,'job',{'status':'running','stage':'non_song'});db.commit()
                 result=non_song.reconcile(db,WRITE_LOCK)
                 with WRITE_LOCK:core.set_state(db,'job',{'status':'complete','stage':'non_song','done':result['new_non_song'],'total':result['new_non_song']});db.commit()
+            elif kind=='video_kind':
+                with WRITE_LOCK:core.set_state(db,'job',{'status':'running','stage':'video_kind'});db.commit()
+                result=video_kind.run(db,WRITE_LOCK)
+                with WRITE_LOCK:core.set_state(db,'job',{'status':'complete','stage':'video_kind','done':result['done'],'total':result['total']});db.commit()
             core.rebuild(db);pipeline.export(db)
         except Exception as exc:
             core.set_state(db,'job',{'status':'error','stage':kind,'reason':type(exc).__name__});db.commit()
@@ -70,7 +74,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send({'token':TOKEN,'stats':core.stats(db),'tracks':core.tracks(db),
                     'queue':song_identity.queue(db),'has_api_key':bool(load_key()),'recognition_job':core.get_state(db,'recognition_job',{'status':'idle'}),
                     'catalogue':[],'reverse_catalogue_job':core.get_state(db,'reverse_catalogue_job',{}),'full_catalogue_job':core.get_state(db,'full_catalogue_job',{}),
-                    'github_sync':github_sync.public_config(),'github_sync_job':core.get_state(db,'github_sync_job',{})})
+                    'github_sync':github_sync.public_config(),'github_sync_job':core.get_state(db,'github_sync_job',{}),'video_kind_job':core.get_state(db,'video_kind_job',{})})
             if path=='/api/github-sync-status':return self.send({'config':github_sync.public_config(),'job':core.get_state(db,'github_sync_job',{}),'conflicts':[{'video_id':r['id'],'candidates':json.loads(r['data'])} for r in db.execute('SELECT * FROM shared_conflicts LIMIT 100')]})
             if path=='/api/github-login-status':return self.send(dict(github_sync.AUTH_STATE))
             if path=='/api/reverse-catalogue-job':return self.send(core.get_state(db,'reverse_catalogue_job',{}))
@@ -79,9 +83,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(user_backup.export(db),extra={'Content-Disposition':'attachment; filename="karaoke-decisions.json"'})
             if path=='/api/recognition-job':return self.send(core.get_state(db,'recognition_job',{'status':'idle'}))
             if path=='/api/non-song-status':return self.send(core.get_state(db,'non_song_job',{}))
+            if path=='/api/video-kind-status':return self.send(core.get_state(db,'video_kind_job',{}))
             if path=='/api/merge-candidates':return self.send({'candidates':song_identity.candidates(db),'history':core.get_state(db,'merge_history',[],'user_state'),'different':list(core.get_state(db,'different_songs',{},'user_state').values())})
             if path=='/api/stats':return self.send(core.stats(db))
             if path=='/api/recognition-targets':
+                purpose_filter=q.get('kind',['all'])[0]
+                if purpose_filter!='all':video_kind.prime_artists(db)
                 minimum=int(q.get('min_views',['5'])[0])
                 if minimum<1:raise ValueError('최소 시청 횟수는 1회 이상으로 입력해 주세요.')
                 status=q.get('status',['review'])[0];search=q.get('q',[''])[0].casefold()
@@ -94,6 +101,7 @@ class Handler(BaseHTTPRequestHandler):
                     if vid not in history or c.get('status') in ('song','non_song'):continue
                     if status!='all' and c.get('status')!=status:continue
                     if search and search not in ((v.get('title') or v.get('history_title',''))+' '+(v.get('channel') or v.get('history_channel',''))).casefold():continue
+                    if purpose_filter!='all' and video_kind.get(v)['kind']!=purpose_filter:continue
                     old=checked.get(vid,{})
                     if not retry and old.get('status') in ('ambiguous','candidate','unresolved','recognized'):
                         skipped+=1;continue
@@ -101,6 +109,8 @@ class Handler(BaseHTTPRequestHandler):
                 items.sort(key=lambda v:(-v['history_records'],v['video_id']))
                 return self.send({'items':items,'total':len(items),'skipped':skipped})
             if path=='/api/videos':
+                video_kind.prime_artists(db)
+                kind=q.get('kind',['all'])[0]
                 status=q.get('status',['review'])[0];search=q.get('q',[''])[0].casefold();offset=max(0,int(q.get('offset',['0'])[0]));limit=min(100,max(1,int(q.get('limit',['50'])[0])))
                 sort=q.get('sort',['frequency'])[0]
                 if sort not in ('frequency','recent'):return self.send({'error':'지원하지 않는 정렬입니다.'},400)
@@ -108,11 +118,14 @@ class Handler(BaseHTTPRequestHandler):
                 result=[]
                 for row in db.execute('SELECT data FROM videos'):
                     v=json.loads(row[0]);c=v.get('classification',{})
-                    if v['video_id'] not in history or c.get('status')=='song' or (c.get('status')=='non_song' and status!='non_song'):continue
+                    if v['video_id'] not in history or c.get('status')=='song' or (c.get('status')=='non_song' and status!='non_song' and kind=='all'):continue
                     if status!='all' and c.get('status')!=status:continue
                     if search and search not in ((v.get('title') or v.get('history_title',''))+' '+(v.get('channel') or v.get('history_channel',''))).casefold():continue
+                    purpose=video_kind.get(v)
+                    if kind!='all' and purpose['kind']!=kind:continue
                     activity=history.get(v['video_id'],{})
                     v['history_records']=activity.get('history_records',0);v['last_watch']=activity.get('last_watch')
+                    v['video_kind']=purpose
                     result.append(v)
                 def order(v):
                     last=history.get(v['video_id'],{}).get('last_watch_sort') or 0
@@ -317,7 +330,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send({'has_api_key':bool(load_key())})
                 if path=='/api/job':
                     kind=payload.get('kind')
-                    if kind not in ('metadata','catalogue','full_catalogue','non_song'):raise ValueError('잘못된 작업입니다.')
+                    if kind not in ('metadata','catalogue','full_catalogue','non_song','video_kind'):raise ValueError('잘못된 작업입니다.')
                     if core.get_state(db,'job',{}).get('status')=='running' or not run_job(kind):return self.send({'error':'이미 조회 중입니다.'},409)
                     return self.send({'started':True})
             return self.send({'error':'Not found'},404)

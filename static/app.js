@@ -8,6 +8,9 @@ let view='recommend',brand='all',query='',sort='score',onlyNumbers=false,limit=4
 let toastTimer,pollTimer,refreshing=false;
 let recommendationLimit=14;
 let bulkMinimum=5;
+let reviewKind='all';
+const kindLabels={song:'곡 중심',collection:'여러 곡·음악 방송',music_explain:'음악 설명·레슨',music_possible:'음악 관련·형식 미확인',activity:'다른 활동 중심',insufficient:'정보 부족'};
+function videoKindsPanel(){const j=S.video_kind_job||{};return `<div class="panel"><h3>영상 종류와 곡 식별은 별도로 봐요</h3><div class="type-summary">${Object.entries(kindLabels).map(([k,label])=>`<span>${label}<b>${count(j.counts?.[k])}</b></span>`).join('')}</div><p class="small muted">${count(j.done)} / ${count(j.total)}영상 분류 · 카테고리 단독 추정 ${count(j.confidence?.category)}개 · 제목 기반 추정 ${count(j.confidence?.inferred)}개는 확정 판정이 아니에요. 게임 영상의 명시된 곡 정보도 보존하며, 음악 방송은 설명의 곡 목록을 별도로 추출해요.</p><button class="button outline" data-action="job" data-kind="video_kind">전체 영상 종류 다시 분류</button></div>`;}
 let bulkRecognition={running:false,stop:false,total:0,done:0,saved:0,candidates:0,errors:0,localOnly:false};
 const date=s=>s?new Date(s).toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}):'—';
 const count=n=>Number(n||0).toLocaleString('ko-KR');
@@ -80,15 +83,15 @@ function artists(){
 }
 function queueView(){const oldBrand=brand;brand='all';const list=filtered({queue:true});const html=intro('READY TO SING','오늘의 부를 목록.','추천에서 담아둔 노래를 여기서 확인하세요. 목록은 다시 열어도 남아 있어요.')+`<div class="section-head"><h2>${list.length}곡 담았어요</h2><a class="button outline" href="/api/export" download="karaoke-queue.csv">CSV 저장 ↓</a></div>`+(list.length?rows(list):empty('아직 담은 노래가 없어요.','추천곡 옆의 + 버튼으로 첫 곡을 담아보세요.'));brand=oldBrand;return html;}
 function reviewView(){
-  return intro('FIND YOUR SONGS','내 기록에서 노래를 모아요.','남은 영상 전체를 자동 처리하고, 근거가 맞는 곡을 저장해요.')+wholeRecognitionSummary()+
-    `<div class="toolbar"><select id="review-status" aria-label="확인할 영상 분류">${[['review','음악 관련 후보'],['unknown','정보 미확인'],['other','다른 분야의 영상'],['excluded','직접 제외한 영상'],['non_song','자동 판정: 곡 영상 아님'],['all','모든 영상']].map(([k,v])=>`<option value="${k}" ${reviewStatus===k?'selected':''}>${v}</option>`).join('')}</select><select id="review-sort" aria-label="확인할 영상 정렬"><option value="frequency" ${reviewSort==='frequency'?'selected':''}>많이 들은 순</option><option value="recent" ${reviewSort==='recent'?'selected':''}>최신순</option></select><input class="search" id="review-search" placeholder="영상 제목이나 채널 검색" aria-label="영상 검색" value="${esc(reviewQuery)}"></div><details class="panel"><summary>시청 횟수와 범위를 골라 확인하기</summary>${bulkRecognitionPanel()}</details><div id="review-results" class="loading">영상을 불러오는 중…</div>`;
+  return intro('FIND YOUR SONGS','내 기록에서 노래를 모아요.','남은 영상 전체를 자동 처리하고, 근거가 맞는 곡을 저장해요.')+videoKindsPanel()+wholeRecognitionSummary()+
+    `<div class="toolbar"><select id="review-status" aria-label="확인할 영상 분류">${[['review','음악 관련 후보'],['unknown','정보 미확인'],['other','다른 분야의 영상'],['excluded','직접 제외한 영상'],['non_song','자동 판정: 곡 영상 아님'],['all','모든 영상']].map(([k,v])=>`<option value="${k}" ${reviewStatus===k?'selected':''}>${v}</option>`).join('')}</select><select id="review-kind" aria-label="영상 종류"><option value="all">모든 영상 종류</option>${Object.entries(kindLabels).map(([k,v])=>`<option value="${k}" ${reviewKind===k?'selected':''}>${v}</option>`).join('')}</select><select id="review-sort" aria-label="확인할 영상 정렬"><option value="frequency" ${reviewSort==='frequency'?'selected':''}>많이 들은 순</option><option value="recent" ${reviewSort==='recent'?'selected':''}>최신순</option></select><input class="search" id="review-search" placeholder="영상 제목이나 채널 검색" aria-label="영상 검색" value="${esc(reviewQuery)}"></div><details class="panel"><summary>시청 횟수와 범위를 골라 확인하기</summary>${bulkRecognitionPanel()}</details><div id="review-results" class="loading">영상을 불러오는 중…</div>`;
 }
 async function loadReview(){
   const version=++reviewVersion;
   try{
-    const r=await api(`/api/videos?status=${encodeURIComponent(reviewStatus)}&q=${encodeURIComponent(reviewQuery)}&sort=${encodeURIComponent(reviewSort)}&offset=${reviewOffset}&limit=30`);
+    const r=await api(`/api/videos?status=${encodeURIComponent(reviewStatus)}&kind=${encodeURIComponent(reviewKind)}&q=${encodeURIComponent(reviewQuery)}&sort=${encodeURIComponent(reviewSort)}&offset=${reviewOffset}&limit=30`);
     if(view!=='review'||version!==reviewVersion)return;
-    $('#review-results').className='';$('#review-results').innerHTML=`<div class="song-list">${r.items.length?r.items.map(v=>`<div class="review-row"><div><strong>${esc(v.title||v.history_title)}</strong><p>${esc(v.channel||v.history_channel||'채널 정보 없음')} · ${esc(v.category||'카테고리 미확인')}</p><p>시청 기록 ${count(v.history_records)}회 · 마지막 기록 ${date(v.last_watch)}</p><p>${esc(v.classification.reason)}</p>${v.classification.status==='song'?`<p class="review-registration">✓ 등록된 곡 · ${esc(v.classification.title)} · ${esc(v.classification.artist)}</p>`:''}</div><div class="review-actions"><button class="button primary" data-action="recognize" data-video-id="${v.video_id}">알아서 확인해라</button><button class="button outline" data-action="review" data-video-id="${v.video_id}">직접 입력</button></div></div>`).join(''):empty('해당하는 영상이 없어요.')}</div><div class="pagination"><button class="button outline" data-action="review-prev" ${reviewOffset===0?'disabled':''}>← 이전</button><span>${count(r.total)}개 중 ${r.total?reviewOffset+1:0}–${Math.min(reviewOffset+30,r.total)}</span><button class="button outline" data-action="review-next" ${reviewOffset+30>=r.total?'disabled':''}>다음 →</button></div>`;
+    $('#review-results').className='';$('#review-results').innerHTML=`<div class="song-list">${r.items.length?r.items.map(v=>`<div class="review-row"><div><strong>${esc(v.title||v.history_title)}</strong><p>${esc(v.channel||v.history_channel||'채널 정보 없음')} · ${esc(v.category||'카테고리 미확인')}</p><p>시청 기록 ${count(v.history_records)}회 · 마지막 기록 ${date(v.last_watch)}</p><p>${esc(v.classification.reason)}</p><p class="review-type">${esc(v.video_kind?.label)}${v.video_kind?.subtype?' · '+esc(v.video_kind.subtype):''} · ${v.video_kind?.confidence==='category'?'카테고리 기반 추정':esc(v.video_kind?.reason)}</p>${v.classification.status==='song'?`<p class="review-registration">✓ 등록된 곡 · ${esc(v.classification.title)} · ${esc(v.classification.artist)}</p>`:''}</div><div class="review-actions"><button class="button primary" data-action="recognize" data-video-id="${v.video_id}">알아서 확인해라</button><button class="button outline" data-action="review" data-video-id="${v.video_id}">직접 입력</button></div></div>`).join(''):empty('해당하는 영상이 없어요.')}</div><div class="pagination"><button class="button outline" data-action="review-prev" ${reviewOffset===0?'disabled':''}>← 이전</button><span>${count(r.total)}개 중 ${r.total?reviewOffset+1:0}–${Math.min(reviewOffset+30,r.total)}</span><button class="button outline" data-action="review-next" ${reviewOffset+30>=r.total?'disabled':''}>다음 →</button></div>`;
     for(const button of document.querySelectorAll('#review-results [data-action="recognize"]')){
       const video=r.items.find(v=>v.video_id===button.dataset.videoId);
       const persisted=video?.recognition_result;
@@ -177,6 +180,9 @@ function syncRecognitionState(){
   },300);
 }
 function paintRecognitionButton(button,result){
+  if(['collection','music_explain','activity_known','activity_provisional','info_missing'].includes(result.status)){
+    button.className='button recognition-excluded';button.textContent=result.candidates?.length?'포함 곡 정보':{collection:'여러 곡 영상',music_explain:'음악 설명',activity_known:'활동 중심',activity_provisional:'활동 중심(추정)',info_missing:'정보 부족'}[result.status];button.title=result.reason||'';button.disabled=false;button.dataset.action='recognition-result';return;
+  }
   if(result.status==='non_song'){
     button.className='button recognition-excluded';button.textContent='곡 영상 아님';button.title=result.reason||'';button.disabled=false;button.dataset.action='recognition-result';return;
   }
@@ -354,6 +360,7 @@ document.addEventListener('change',e=>{
   if(e.target.id==='only-numbers'){onlyNumbers=e.target.checked;render();}
   if(e.target.id==='review-sort'){reviewSort=e.target.value;reviewOffset=0;loadReview();}
   if(e.target.id==='review-status'){reviewStatus=e.target.value;reviewOffset=0;loadReview();}
+  if(e.target.id==='review-kind'){reviewKind=e.target.value;reviewStatus='all';reviewOffset=0;render();}
 });
 document.addEventListener('submit',async e=>{
   e.preventDefault();try{
@@ -394,7 +401,7 @@ async function startBulkRecognition(){
   const status=reviewStatus,q=reviewQuery;
   try{
     const retry=$('#bulk-retry')?.checked?'1':'0';
-    const targets=await api(`/api/recognition-targets?status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}&min_views=${n}&retry=${retry}`);
+    const targets=await api(`/api/recognition-targets?status=${encodeURIComponent(status)}&q=${encodeURIComponent(q)}&min_views=${n}&kind=${encodeURIComponent(reviewKind)}&retry=${retry}`);
     bulkRecognition.total=targets.items.length;updateBulkRecognition();
     for(const item of targets.items){
       if(bulkRecognition.stop)break;
@@ -429,7 +436,7 @@ function startReversePoll(){
 let wholeSavedSeen=-1;
 function wholePanelContent(){
   const j=S.recognition_job||{},active=j.status==='running',current=j.engine==='whole-metadata-v1';
-  return `<h3>남은 영상 전체에서 음악 추출</h3><p class="small muted">시청 횟수·위의 분류 선택과 관계없이 모든 미등록 영상을 자동 판별해요. 빠른 전체 판별 후 음악 근거가 있는 영상의 음악 정보·원곡 링크·음악 DB를 조회하고, 일치하는 곡을 저장해요. 직접 수정·제외한 영상은 유지해요. 화면을 닫아도 서버가 켜져 있으면 계속 진행하며 서버 재시작 시 진행 중이던 작업을 이어가요.</p><div class="dialog-actions"><button class="button primary" data-action="whole-start" ${active?'disabled':''}>${current&&j.status!=='complete'?'전체 처리 이어가기':'남은 영상 전체 자동 처리'}</button><button class="button outline" data-action="whole-stop" ${active?'':'disabled'}>전체 처리 중지</button><button class="button outline" data-action="job" data-kind="non_song">곡 아닌 영상 정리</button></div>${current?`<p class="note">${{running:'진행 중',complete:'완료',stopped:'중지됨',error:'오류'}[j.status]||'대기'} · ${j.stage==='local'?'전체 로컬 판별':'음악 메타데이터 확인'}<br>처리 완료 ${count(j.done)} / ${count(j.total)} · 로컬 판별 대기 ${count(j.local_remaining)} · 추가 조회 대기 ${count(j.deep_remaining)}<br>자동 저장 ${count(j.saved)} · 후보 ${count(j.candidates)} · 곡 영상 아님 ${count(j.non_song)} · 음악 근거 없음 ${count(j.no_music_evidence)} · 곡 정보 미확인 ${count(j.unresolved)} · 오류 ${count(j.errors)}${j.current_title?`<br>현재: ${esc(j.current_title)}`:''}${j.reason?`<br>${esc(j.reason)}`:''}</p>`:'<p class="small muted">기존 전체 확인 결과도 최신 인식 로직으로 다시 검사해요. 사람이 후보를 하나씩 선택할 필요 없이 처리합니다.</p>'}`;
+  return `<h3>남은 영상 전체에서 음악 추출</h3><p class="small muted">시청 횟수·위의 분류 선택과 관계없이 모든 미등록 영상을 자동 판별해요. 빠른 전체 판별 후 음악 근거가 있는 영상의 음악 정보·원곡 링크·음악 DB를 조회하고, 일치하는 곡을 저장해요. 직접 수정·제외한 영상은 유지해요. 화면을 닫아도 서버가 켜져 있으면 계속 진행하며 서버 재시작 시 진행 중이던 작업을 이어가요.</p><div class="dialog-actions"><button class="button primary" data-action="whole-start" ${active?'disabled':''}>${current&&j.status!=='complete'?'전체 처리 이어가기':'남은 영상 전체 자동 처리'}</button><button class="button outline" data-action="whole-stop" ${active?'':'disabled'}>전체 처리 중지</button><button class="button outline" data-action="job" data-kind="non_song">곡 아닌 영상 정리</button></div>${current?`<p class="note">${{running:'진행 중',complete:'완료',stopped:'중지됨',error:'오류'}[j.status]||'대기'} · ${j.stage==='local'?'전체 로컬 판별':'음악 메타데이터 확인'}<br>처리 완료 ${count(j.done)} / ${count(j.total)} · 로컬 판별 대기 ${count(j.local_remaining)} · 추가 조회 대기 ${count(j.deep_remaining)}<br>자동 저장 ${count(j.saved)} · 후보 ${count(j.candidates)} · 곡 영상 아님 ${count(j.non_song)} · 단일곡 근거 없음 ${count(j.no_music_evidence)} · 여러 곡 ${count(j.collection)} · 음악 설명 ${count(j.music_explain)} · 활동 유형 판별 ${count(j.activity_known)} · 활동 유형 추정 ${count(j.activity_provisional)} · 정보 부족 ${count(j.info_missing)} · 곡 정보 미확인 ${count(j.unresolved)} · 오류 ${count(j.errors)}${j.current_title?`<br>현재: ${esc(j.current_title)}`:''}${j.reason?`<br>${esc(j.reason)}`:''}</p>`:'<p class="small muted">기존 전체 확인 결과도 최신 인식 로직으로 다시 검사해요. 사람이 후보를 하나씩 선택할 필요 없이 처리합니다.</p>'}`;
 }
 function updateWholePanel(){const panel=$('#whole-scan-panel');if(panel)panel.innerHTML=wholePanelContent();}
 function startWholePoll(){
@@ -439,6 +446,7 @@ function startWholePoll(){
     catch(e){clearInterval(wholePollTimer);wholePollTimer=null;toast(e.message);}
   },4000);
 }
+
 
 
 

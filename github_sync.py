@@ -89,6 +89,9 @@ def export_records(db):
         elif c.get('source')=='auto_recognition' and (edit or {}).get('confident') is True:evidence='verified_auto'
         elif result.get('status')=='recognized' and t.get('confident') is True and core.norm(t.get('title',''))==core.norm(c['title']) and core.norm(t.get('artist',''))==core.norm(c['artist']):evidence='verified_auto'
         else:continue
+        import video_kind
+        purpose=video_kind.get(v)
+        if evidence!='manual' and (purpose['kind'] in ('collection','music_explain') or (purpose['kind']=='activity' and not purpose.get('has_music_cue'))):continue
         raw=v.get('title') or v.get('history_title','')
         if evidence!='manual' and re.search(r'(?i)歌枠|雑談|medley|メドレー|playlist|作業用|耐久|\blive\b|minecraft|マイクラ',raw):continue
         # Repeated author/lyricist credits in a Topic description are not a performer name.

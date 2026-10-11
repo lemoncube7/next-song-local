@@ -190,7 +190,8 @@ def classify(video, library=None, correction=None, shared=None):
     if ordinary:return ordinary
     import non_song
     if non_song.valid(video):return {'status':'non_song','source':'automatic_non_song','reason':video['non_song']['reason']}
-    signals=bool(re.search(r'(?i)\bofficial\s+(?:music\s+)?video\b|\bofficial\s+mv\b|\blyric\s+video\b|\bcover\b|歌ってみた|歌枠|作詞|作曲|デモソング|music video|뮤직비디오|커버|가사|노래',title+'\n'+desc[:1800]))
+    import recognition
+    signals=bool(re.search(r'(?i)\bofficial\s+(?:music\s+)?video\b|\bofficial\s+mv\b|\blyric\s+video\b|\bcover\b|歌ってみた|歌枠|作詞|作曲|デモソング|music video|뮤직비디오|커버|가사|노래',title+'\n'+desc[:1800])) or bool(recognition.original_links(desc))
     if video.get('category')=='Music' or signals:
         return {'status':'review','reason':'음악 관련 영상 — 곡 정보 확인 필요'}
     if not video.get('category'):

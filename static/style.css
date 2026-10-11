@@ -40,3 +40,4 @@
 .review-row .review-registration{color:#285936;font-weight:600;background:#deeddf;padding:6px 10px;border-radius:6px;display:inline-block;}
 .linked-video-row{gap:16px;align-items:flex-start}.linked-video-row>a{flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.6}.linked-video-row>button{flex-shrink:0}
 .recognition-excluded{background:#e9ece7;color:#596351;border:1px solid #bac3b2}
+.type-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:12px;margin:16px 0}.type-summary span{padding:12px;background:#f1f3e9;font-size:12px}.type-summary b{display:block;font-size:22px;margin-top:6px}.review-type{color:#3d6654!important}

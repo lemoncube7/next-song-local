@@ -1,7 +1,7 @@
 """Resumable whole-history scan: cheap pass first, then queued public metadata."""
 import json,re,time
 from collections import defaultdict
-import core,recognition,bulk_recognition,original_metadata,music_metadata,song_databases,pipeline,non_song
+import core,recognition,bulk_recognition,original_metadata,music_metadata,song_databases,pipeline,non_song,video_kind
 
 VERSION='whole-metadata-v1'
 
@@ -24,6 +24,7 @@ def potential(video,result):
     if non_song.valid(video):return False
     raw=video.get('title') or video.get('history_title','')
     return (video.get('metadata_status')=='pending' or video.get('classification',{}).get('status')=='review' or
+            bool(recognition.original_links(video.get('description',''))) or
             bulk_recognition.music_evidence(video,result) or
             bool(re.search(non_song.MUSIC,raw)) or
             bool(re.search(r'(?i)歌ってみた|cover|커버|가사|lyrics|lyric video|歌詞|remix|ピアノ|piano|\bfeat\.|\bft\.',raw)))
@@ -54,6 +55,7 @@ def resolve(video,result):
     return result
 
 def run(db,load_key,write_lock,stop):
+    video_kind.prime_artists(db)
     db.execute('CREATE TABLE IF NOT EXISTS whole_scan_tasks (id TEXT PRIMARY KEY, version TEXT, stage TEXT, data TEXT)');db.commit()
     db.execute('CREATE INDEX IF NOT EXISTS whole_scan_stage ON whole_scan_tasks(version,stage)');db.commit()
     videos={r['id']:json.loads(r['data']) for r in db.execute('SELECT id,data FROM videos')}
@@ -93,7 +95,7 @@ def run(db,load_key,write_lock,stop):
             if rebuild:core.rebuild(db)
             counts=dict(db.execute('SELECT stage,COUNT(*) FROM whole_scan_tasks WHERE version=? GROUP BY stage',(VERSION,)).fetchall())
             state.update(done=sum(n for s,n in counts.items() if s not in ('local','deep')),local_remaining=counts.get('local',0),deep_remaining=counts.get('deep',0),
-                         saved=counts.get('saved',0),candidates=counts.get('candidate',0),unresolved=counts.get('unresolved',0),non_song=counts.get('non_song',0),no_music_evidence=counts.get('no_music_evidence',0),errors=counts.get('error',0),updated_at=time.time())
+                         saved=counts.get('saved',0),candidates=counts.get('candidate',0),unresolved=counts.get('unresolved',0),non_song=counts.get('non_song',0),collection=counts.get('collection',0),music_explain=counts.get('music_explain',0),activity_known=counts.get('activity_known',0),activity_provisional=counts.get('activity_provisional',0),info_missing=counts.get('info_missing',0),no_music_evidence=counts.get('no_music_evidence',0),errors=counts.get('error',0),updated_at=time.time())
             core.set_state(db,'recognition_job',state);db.commit()
         if rebuild:index_tracks()
     def local(v):
@@ -139,6 +141,12 @@ def run(db,load_key,write_lock,stop):
                     else:
                         original_metadata.ensure_originals(db,v,load_key(),write_lock)
                         music_metadata.ensure(db,v,write_lock);v=core.video_data(db,vid);videos[vid]=v
+                        purpose=video_kind.get(v)
+                        if purpose['kind'] in ('collection','music_explain'):
+                            if purpose['has_original_reference'] and not load_key():references(db,v,write_lock)
+                            songs=video_kind.mentions(v,catalogue,lambda i:core.video_data(db,i))
+                            result={'status':purpose['kind'],'reason':purpose['reason']+' — 명시된 포함 곡을 별도로 추출','candidates':songs}
+                            pending.append((vid,result,purpose['kind']));flush();continue
                         verdict=non_song.decide(v,local(v))
                         if verdict:
                             with write_lock:
