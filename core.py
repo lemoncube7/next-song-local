@@ -96,6 +96,8 @@ def connect(path=None):
       CREATE TABLE IF NOT EXISTS shared_conflicts (id TEXT PRIMARY KEY,data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, data TEXT NOT NULL);
     ''')
+    import video_index
+    video_index.ensure(db)
     return db
 def get_state(db, key, default=None, table='state'):
     assert table in ('state', 'user_state')
@@ -228,7 +230,7 @@ def match_track(track, catalogue, reference):
             match['reason']='제목 별칭 확인 필요' if hint and rt==norm(hint) else '동명곡·커버 아티스트 확인 필요'
             candidates.append(match)
     return exact,candidates
-def rebuild(db):
+def rebuild(db, affected_video=None):
     import song_identity
     aliases=get_state(db,"song_aliases",{},"user_state")
     events=defaultdict(list)
@@ -236,12 +238,24 @@ def rebuild(db):
     libraries={r['id']:json.loads(r['data']) for r in db.execute('SELECT * FROM library')}
     shared={r['id']:json.loads(r['data']) for r in db.execute('SELECT * FROM shared_identities')}
     corrections=get_state(db,'corrections',{},'user_state')
+    affected_groups=None
+    if affected_video is not None:
+        changed=video_data(db,affected_video)
+        changed['classification']=classify(changed,libraries.get(affected_video),corrections.get(affected_video),shared.get(affected_video))
+        save_video(db,changed)
+        affected_groups={json.loads(r[0])['id'] for r in db.execute('SELECT data FROM tracks') if affected_video in json.loads(r[0]).get('video_ids',[])}
+        c=changed['classification']
+        if c['status']=='song':
+            original=song_identity.identity(c['title'],c['artist'])
+            tid=song_identity.identity(song_identity.presentation_title(c['title']),canonical(c['artist']))
+            if original in aliases:tid=song_identity.resolve(original,song_identity.presentation_title(c['title']),canonical(c['artist']),aliases)[0]
+            affected_groups.add(tid)
     catalogue=[json.loads(r[0]) for r in db.execute('SELECT data FROM catalogue')]
     catalogue_by_title=defaultdict(list)
     for row in catalogue:catalogue_by_title[norm(catalogue_title(row.get('title','')))].append(row)
     reference=db.execute('SELECT MAX(time) FROM events').fetchone()[0] or datetime.now(timezone.utc).isoformat()
     ref=timestamp(reference);groups={};statuses=Counter()
-    for r in db.execute('SELECT * FROM videos').fetchall():
+    for r in db.execute("SELECT * FROM videos" if affected_groups is None else "SELECT v.* FROM videos v JOIN video_browse b ON b.id=v.id WHERE b.status='song'").fetchall():
         data=json.loads(r['data']);classification=classify(data,libraries.get(r['id']),corrections.get(r['id']),shared.get(r['id']))
         if data.get('classification')!=classification:
             data['classification']=classification;save_video(db,data)
@@ -254,6 +268,7 @@ def rebuild(db):
         artist=canonical(classification['artist'])
         tid=song_identity.identity(title,artist)
         tid,title,artist=song_identity.resolve(original,title,artist,aliases) if original in aliases else song_identity.resolve(tid,title,artist,aliases)
+        if affected_groups is not None and tid not in affected_groups:continue
         g=groups.setdefault(tid,{'id':tid,'title':title,'artist':artist,'member_ids':[],'aliases':[],'video_ids':[],'dates':[],'sources':[]})
         g['member_ids']=list(dict.fromkeys(g['member_ids']+[original,tid]))
         label={'title':classification['title'],'artist':classification['artist']}
@@ -265,7 +280,8 @@ def rebuild(db):
             alias_id=song_identity.identity(alternate['title'],alternate['artist'])
             if alias_id not in g['member_ids']:g['member_ids'].append(alias_id)
         g['video_ids'].append(r['id']);g['dates'].extend(events[r['id']]);g['sources'].append(classification['source'])
-    db.execute('DELETE FROM tracks')
+    if affected_groups is None:db.execute('DELETE FROM tracks')
+    else:db.executemany('DELETE FROM tracks WHERE id=?',[(tid,) for tid in affected_groups])
     for g in groups.values():
         dates=g.pop('dates');times=[timestamp(t) for t in dates]
         g['history_records']=len(dates);g['last_watch']=max(dates)
@@ -289,6 +305,8 @@ def rebuild(db):
             if item not in g['numbers']:g['numbers'].append(item)
         g['sources']=sorted(set(g['sources']))
         db.execute('INSERT INTO tracks VALUES (?,?)',(g['id'],json.dumps(g,ensure_ascii=False)))
+    if affected_groups is not None:
+        statuses=dict(db.execute('SELECT b.status,count(*) FROM video_browse b JOIN video_activity a ON a.id=b.id GROUP BY b.status').fetchall())
     set_state(db,'classification_counts',dict(statuses));set_state(db,'reference_time',reference);db.commit()
 def tracks(db):
     followed=set(get_state(db,'follows',[],'user_state'));hidden=set(get_state(db,'hidden',[],'user_state'))

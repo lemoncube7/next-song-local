@@ -114,38 +114,24 @@ class Handler(BaseHTTPRequestHandler):
                 status=q.get('status',['review'])[0];search=q.get('q',[''])[0].casefold();offset=max(0,int(q.get('offset',['0'])[0]));limit=min(100,max(1,int(q.get('limit',['50'])[0])))
                 sort=q.get('sort',['frequency'])[0]
                 if sort not in ('frequency','recent'):return self.send({'error':'지원하지 않는 정렬입니다.'},400)
-                history={r['video_id']:dict(r) for r in db.execute('SELECT video_id,COUNT(*) AS history_records,MAX(time) AS last_watch,MAX(julianday(time)) AS last_watch_sort FROM events WHERE video_id IS NOT NULL GROUP BY video_id')}
-                result=[]
-                for row in db.execute('SELECT data FROM videos'):
-                    v=json.loads(row[0]);c=v.get('classification',{})
-                    if v['video_id'] not in history or c.get('status')=='song' or (c.get('status')=='non_song' and status!='non_song' and kind=='all'):continue
-                    if status!='all' and c.get('status')!=status:continue
-                    if search and search not in ((v.get('title') or v.get('history_title',''))+' '+(v.get('channel') or v.get('history_channel',''))).casefold():continue
-                    purpose=video_kind.get(v)
-                    if kind!='all' and purpose['kind']!=kind:continue
-                    activity=history.get(v['video_id'],{})
-                    v['history_records']=activity.get('history_records',0);v['last_watch']=activity.get('last_watch')
-                    v['video_kind']=purpose
-                    result.append(v)
-                def order(v):
-                    last=history.get(v['video_id'],{}).get('last_watch_sort') or 0
-                    return (v['history_records'],last,v['video_id']) if sort=='frequency' else (last,v['history_records'],v['video_id'])
-                result.sort(key=order,reverse=True)
-                page=result[offset:offset+limit]
+                import video_index
+                listing=video_index.page(db,status,kind,search,sort,offset,limit)
+                page=listing['items']
+                for v in page:v['video_kind']=video_kind.get(v)
                 for v in page:
                     saved=db.execute('SELECT data FROM recognition_results WHERE id=?',(v['video_id'],)).fetchone()
                     if saved:v['recognition_result']=json.loads(saved[0])
-                return self.send({'total':len(result),'items':page})
+                return self.send(listing)
             if path=='/api/video':
                 v=core.video_data(db,q.get('id',[''])[0])
                 if not v:return self.send({'error':'영상을 찾지 못했습니다.'},404)
                 return self.send(v)
             if path=='/api/export':
                 items={t['id']:t for t in core.tracks(db)};queue=song_identity.queue(db)
-                out=io.StringIO();w=csv.writer(out);w.writerow(['곡명','아티스트','TJ 번호','금영 번호','기록 수','마지막 기록','영상 URL'])
+                out=io.StringIO();w=csv.writer(out);w.writerow(['곡명','아티스트','TJ 번호','금영 번호','DAM 번호','JOYSOUND 번호','기록 수','마지막 기록','영상 URL'])
                 for tid in queue:
                     if tid not in items:continue
-                    t=items[tid];w.writerow([t['title'],t['artist'],' / '.join(n['no'] for n in t['numbers'] if n['brand']=='tj'),' / '.join(n['no'] for n in t['numbers'] if n['brand']=='kumyoung'),t['history_records'],t['last_watch'],'https://www.youtube.com/watch?v='+t['video_ids'][0]])
+                    t=items[tid];w.writerow([t['title'],t['artist'],' / '.join(n['no'] for n in t['numbers'] if n['brand']=='tj'),' / '.join(n['no'] for n in t['numbers'] if n['brand']=='kumyoung'),' / '.join(n['no'] for n in t['numbers'] if n['brand']=='dam'),' / '.join(n['no'] for n in t['numbers'] if n['brand']=='joysound'),t['history_records'],t['last_watch'],'https://www.youtube.com/watch?v='+t['video_ids'][0]])
                 return self.send(('\ufeff'+out.getvalue()).encode('utf8'),ctype='text/csv; charset=utf-8',extra={'Content-Disposition':'attachment; filename="karaoke-queue.csv"'})
             return self.send({'error':'Not found'},404)
         except (ValueError,TypeError) as e:return self.send({'error':str(e)},400)
@@ -308,10 +294,10 @@ class Handler(BaseHTTPRequestHandler):
                         if any(not isinstance(a,dict) or not all(isinstance(a.get(k),str) and 0<len(a[k])<=300 for k in ('title','artist')) for a in labels):raise ValueError('제목 별칭을 확인해 주세요.')
                         edits[vid]['alternate_labels']=labels
                     db.execute('DELETE FROM recognition_results WHERE id=?',(vid,))
-                    core.set_state(db,'corrections',edits,'user_state');db.commit();core.rebuild(db);return self.send({'ok':True})
+                    core.set_state(db,'corrections',edits,'user_state');core.rebuild(db,affected_video=vid);return self.send({'ok':True})
                 if path=='/api/number':
                     tid=payload.get('id','');brand=payload.get('brand');no=str(payload.get('no','')).strip()
-                    if brand not in ('tj','kumyoung') or not no.isdigit() or len(no)>8:raise ValueError('브랜드와 숫자로 된 곡 번호를 확인해 주세요.')
+                    if brand not in ('tj','kumyoung','dam','joysound') or not __import__('re').fullmatch(r'[0-9]{1,8}(?:-[0-9]{1,3})?',no):raise ValueError('브랜드와 숫자로 된 곡 번호를 확인해 주세요.')
                     if not db.execute('SELECT 1 FROM tracks WHERE id=?',(tid,)).fetchone():raise ValueError('곡을 찾지 못했습니다.')
                     numbers=core.get_state(db,'numbers',{},'user_state')
                     members=json.loads(db.execute('SELECT data FROM tracks WHERE id=?',(tid,)).fetchone()[0]).get('member_ids',[tid])

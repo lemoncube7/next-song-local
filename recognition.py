@@ -121,7 +121,7 @@ def original_links(description):
     """Only links in short, explicitly labelled original-song blocks."""
     lines=description.splitlines();found=[]
     for i,line in enumerate(lines):
-        labelled=bool(re.match(r'(?i)^\s*[■□・●]*\s*(?:original(?: song)?(?: by)?|原曲|本家(?:様)?|본가(?:MV)?|원곡(?:MV)?|원본 영상 출처)\s*[:：]?\s*',line))
+        labelled=bool(re.match(r'(?i)^\s*[■□・●]*\s*(?:original(?: song)?(?: by)?|music|原曲|本家(?:様)?|본가(?:MV)?|원곡(?:MV)?|원본 영상 출처)\s*[:：]?\s*',line))
         named=bool(re.search(r'[「『][^」』]+[」』].*Music Video|/[^/\n]+\s*様\s*$',line,re.I))
         if not labelled and not named:continue
         block='\n'.join(lines[i:i+4])
@@ -220,6 +220,9 @@ def recognize(video, catalogue=(), lookup=None, tracks=()):
     artist=artist_name(channel)
     known=confirmed_identity(video,tracks)
     if known:return known
+    import description_identity
+    described=description_identity.identity(video,lookup,tracks)
+    if described:return described
     if lookup:
         cover=recognize_cover(video,lookup)
         if cover:return cover

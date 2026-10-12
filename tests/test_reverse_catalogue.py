@@ -24,3 +24,17 @@ class ReverseTests(unittest.TestCase):
         rows={'song':[{'title':'Song','singer':'Original','brand':'tj','no':'1'}]};index=reverse_catalogue.TitleIndex(rows)
         self.assertEqual(reverse_catalogue.match({'title':'Song','channel':'Other','category':'Music'},rows,index),[])
         self.assertEqual(reverse_catalogue.match({'title':'Original - Song medley','channel':'Original','category':'Music'},rows,index),[])
+
+    def test_japanese_catalogues_reuse_original_credit(self):
+        rows={'青と夏':[{'title':'青と夏','singer':'Mrs. GREEN APPLE','brand':'dam','no':'1234-56'}, {'title':'青と夏','singer':'Mrs. GREEN APPLE','brand':'joysound','no':'123456'}]}
+        found=reverse_catalogue.match({'title':'青と夏 cover','channel':'Cover singer','category':'Music','description':'Original: Mrs. GREEN APPLE - 青と夏'},rows,reverse_catalogue.TitleIndex(rows))
+        self.assertEqual(len(found),1)
+        self.assertEqual(found[0]['artist'],'Mrs. GREEN APPLE')
+
+
+    def test_punctuated_latin_name_not_substring(self):
+        rows={'imp':[{'title':'IMP.','singer':'IMP.','brand':'dam','no':'1381-57'}]};index=reverse_catalogue.TitleIndex(rows)
+        for title in ['Genshin Impact MMD','Simpsons shorts']:
+            self.assertEqual(reverse_catalogue.match({'title':title,'category':'Music'},rows,index),[])
+        found=reverse_catalogue.match({'title':'IMP. - IMP. Official MV','channel':'IMP.','category':'Music'},rows,index)
+        self.assertEqual(len(found),1)

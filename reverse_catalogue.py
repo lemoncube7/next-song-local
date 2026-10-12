@@ -1,5 +1,5 @@
 """Local reverse lookup using an Aho-Corasick title index and artist evidence."""
-import json,re,time
+import json,re,time,unicodedata
 from collections import deque,defaultdict
 import core,bulk_recognition,recognition
 
@@ -27,6 +27,13 @@ class TitleIndex:
             state=self.next[state].get(char,0);result.update(self.out[state])
         return result
 
+def latin_match(name,text):
+    name=unicodedata.normalize('NFKC',name);text=unicodedata.normalize('NFKC',text)
+    return bool(re.search(r'(?i)(?<![A-Za-z0-9])'+re.escape(name)+r'(?![A-Za-z0-9])',text))
+
+def latin_name(name):
+    return name.isascii() and bool(re.search(r'[A-Za-z]',name))
+
 def match(video,rows,index):
     raw=video.get('title') or video.get('history_title','');nt=core.norm(raw)
     if re.search(r'(?i)歌枠|歌配信|medley|メドレー|playlist|作業用|耐久|모음|\blive\b|reaction|리액션|interview|인터뷰|雑談',raw):return []
@@ -35,10 +42,10 @@ def match(video,rows,index):
     keys=index.find(nt)
     exact={nt}|{core.norm(s) for s in re.findall(r'[「『]([^」』]+)[」』]',raw)}
     keys.update(k for k in exact if k in rows)
-    credits=[]
+    credits=[];credit_text=[]
     for line in video.get('description','').splitlines():
         m=re.match(r'(?i)^\s*[■□・●]*\s*(?:Original(?: song)?(?: by)?|原曲|本家(?:様)?|원곡|Music|作曲|音楽)\s*[:：]?\s+(.+)$',line)
-        if m:credits.append(core.norm(m[1]))
+        if m:credits.append(core.norm(m[1]));credit_text.append(m[1])
     channel=core.norm(core.number_artist(video.get('channel') or video.get('history_channel','')))
     groups={}
     for key in keys:
@@ -46,18 +53,19 @@ def match(video,rows,index):
         if len(key)<3 and key not in exact:continue
         for row in rows[key]:
             song=core.catalogue_title(row['title'])
-            if re.fullmatch(r'[A-Za-z0-9 ]+',song) and not re.search(r'(?i)(?<![A-Za-z0-9])'+re.escape(song)+r'(?![A-Za-z0-9])',raw):continue
+            if latin_name(song) and not latin_match(song,raw):continue
             artist=core.number_artist(row['singer']);na=core.norm(artist)
             if len(na)<3:continue
             # Latin names must be separate words rather than arbitrary title substrings.
             in_title=na in nt
-            if re.fullmatch(r'[A-Za-z0-9 ]+',artist):in_title=bool(re.search(r'(?i)(?<![A-Za-z0-9])'+re.escape(artist)+r'(?![A-Za-z0-9])',raw))
-            forms={na}
+            if latin_name(artist):in_title=latin_match(artist,raw)
+            forms={na};names={artist}
             for group in core.ARTIST_GROUPS:
                 if na in {core.norm(g) for g in group}:
-                    forms.update(core.norm(g) for g in group)
+                    forms.update(core.norm(g) for g in group);names.update(group)
                     in_title=in_title or any(bool(re.search(r'(?i)(?<![A-Za-z0-9])'+re.escape(g)+r'(?![A-Za-z0-9])',raw)) for g in group if len(core.norm(g))>=3)
-            if not (channel==na or in_title or any(f in c for f in forms for c in credits)):continue
+            credit_agrees=any(latin_match(name,text) if latin_name(name) else core.norm(name) in core.norm(text) for name in names for text in credit_text)
+            if not (channel==na or in_title or credit_agrees):continue
             identity=(key,na)
             value=groups.setdefault(identity,{'title':core.catalogue_title(row['title']),'artist':artist,'numbers':[],'confident':True,'reason':'노래방 수록곡의 제목과 가수·원곡 크레딧이 영상 정보와 함께 일치'})
             value['numbers'].append({'brand':row['brand'],'no':str(row['no'])})

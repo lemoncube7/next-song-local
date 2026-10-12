@@ -27,7 +27,7 @@ def save_config(payload):
 def credential(c):
     if c.get('token'):return c['token']
     try:
-        p=subprocess.run([gh_executable(),'auth','token','--hostname','github.com'],capture_output=True,text=True,timeout=8,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+        p=subprocess.run([gh_executable(),'auth','token','--hostname','github.com'],stdin=subprocess.DEVNULL,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=8,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         if p.returncode==0 and p.stdout.strip():return p.stdout.strip()
     except (OSError,subprocess.TimeoutExpired):pass
     raise ValueError('GitHub에 로그인하거나 이 비공개 저장소용 토큰을 설정하세요.')
@@ -43,16 +43,37 @@ def start_login():
     if not AUTH_LOCK.acquire(blocking=False):return dict(AUTH_STATE)
     AUTH_STATE.clear();AUTH_STATE.update(status='starting',url='https://github.com/login/device')
     def work():
+        timer=None
         try:
-            p=subprocess.Popen([gh_executable(),'auth','login','--hostname','github.com','--git-protocol','https','--web'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-            for line in p.stdout:
-                m=re.search(r'one-time code:\s*([A-Za-z0-9-]+)',line)
-                if m:AUTH_STATE.update(status='awaiting_approval',code=m[1])
+            # The packaged app has no interactive terminal for hidden gh prompts.
+            # DEVNULL also supplies a valid stdin handle in Windows GUI launches.
+            p=subprocess.Popen([gh_executable(),'auth','login','--hostname','github.com','--git-protocol','https','--web'],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,encoding='utf-8',errors='replace',creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            def timeout():
+                if AUTH_STATE.get('status')=='starting' and p.poll() is None:
+                    AUTH_STATE.update(status='error',reason='30초 안에 인증 코드를 받지 못했어요. 인터넷 연결·방화벽을 확인하고 다시 시도하세요.')
+                    p.kill()
+            timer=threading.Timer(30,timeout);timer.daemon=True;timer.start()
+            buffer=''
+            while True:
+                char=p.stdout.read(1)
+                if not char:break
+                buffer=(buffer+char)[-1024:]
+                plain=re.sub(r'\x1b\[[0-9;]*[A-Za-z]','',buffer)
+                match=re.search(r'one-time code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})(?![A-Z0-9])',plain,re.I)
+                if match and AUTH_STATE.get('status')=='starting':
+                    AUTH_STATE.update(status='awaiting_approval',code=match[1]);timer.cancel()
             if p.wait()==0:AUTH_STATE.clear();AUTH_STATE.update(status='complete')
-            else:AUTH_STATE.update(status='error',reason='GitHub 인증이 완료되지 않았어요. 다시 시도하세요.')
+            elif AUTH_STATE.get('status')!='error':
+                reason='GitHub 인증이 완료되지 않았어요. 다시 시도하세요.'
+                if 'git' in buffer.lower() and any(word in buffer.lower() for word in ('not found','cannot find','executable file')):reason='Git 실행 파일을 찾지 못했어요. Git for Windows 설치 후 앱을 다시 실행하세요.'
+                elif any(word in buffer.lower() for word in ('certificate','x509')):reason='GitHub 인증 서버의 인증서를 확인하지 못했어요. PC 시간·네트워크 보안 설정을 확인하세요.'
+                AUTH_STATE.update(status='error',reason=reason)
         except Exception as e:AUTH_STATE.update(status='error',reason=str(e) if isinstance(e,ValueError) else type(e).__name__)
-        finally:AUTH_LOCK.release()
+        finally:
+            if timer:timer.cancel()
+            AUTH_LOCK.release()
     threading.Thread(target=work,daemon=True).start();return dict(AUTH_STATE)
+
 def request(path,token,payload=None,missing_ok=False):
     data=json.dumps(payload).encode() if payload is not None else None
     req=urllib.request.Request('https://api.github.com'+path,data=data,method='PUT' if data is not None else 'GET',headers={'Authorization':'Bearer '+token,'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'NextSongLocal/1.0','Content-Type':'application/json'})

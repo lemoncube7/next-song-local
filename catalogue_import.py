@@ -1,5 +1,5 @@
 """Resumable public catalogue import, filtering TJ/KY locally."""
-import json,time,urllib.request
+import json,time,urllib.request,re
 import core
 
 def run(db,write_lock):
@@ -18,7 +18,7 @@ def run(db,write_lock):
         pages=max(pages,int(data['total']['page']))
         with write_lock:
             for row in data.get('data',[]):
-                if row.get('brand') in ('tj','kumyoung') and str(row.get('no','')).isdigit() and row.get('title') and row.get('singer'):
+                if row.get('brand') in ('tj','kumyoung','dam','joysound') and re.fullmatch(r'[0-9]{1,8}(?:-[0-9]{1,3})?',str(row.get('no',''))) and row.get('title') and row.get('singer'):
                     db.execute('INSERT OR REPLACE INTO catalogue VALUES (?,?,?)',(row['brand'],str(row['no']),json.dumps(row,ensure_ascii=False)))
             state.update(next_page=page+1,total_pages=pages,brand_counts=dict(db.execute('SELECT brand,COUNT(*) FROM catalogue GROUP BY brand').fetchall()))
             core.set_state(db,'full_catalogue_job',state);db.commit()
