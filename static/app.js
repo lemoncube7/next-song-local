@@ -4,7 +4,10 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const brandNames={tj:'TJ',kumyoung:'금영',dam:'DAM',joysound:'JOYSOUND'};
 const searchKey=s=>String(s||'').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
 const sourceNames={library:'라이브러리',topic:'Topic 음원',auto_generated:'음원 설명',video_title:'제목에서 추정',manual:'직접 확인',auto_recognition:'자동 인식',shared:'공유된 확정 곡'};
-const names={recommend:'오늘의 추천',songs:'기록 속 노래',artists:'아티스트',queue:'부를 목록',review:'곡 확인하기',data:'데이터 가져오기',merge:'같은 곡 정리'};
+const names={recommend:'오늘의 추천',songs:'기록 속 노래',knowledge:'분류된 곡',artists:'아티스트',queue:'부를 목록',review:'곡 확인하기',data:'데이터 가져오기',merge:'같은 곡 정리'};
+let knowledgeQuery='',knowledgeScope='all',knowledgeOffset=0,knowledgeRequest=0;
+function knowledgeView(){return intro('SHARED SONG KNOWLEDGE','분류된 곡 · 함께 모은 노래 정보.','내 시청 기록과 관계없이, 이 PC에서 분류한 곡과 동기화로 받은 다른 사람의 곡 정보를 볼 수 있어요.')+`<div class="toolbar"><input class="search" id="knowledge-search" value="${esc(knowledgeQuery)}" placeholder="곡명·아티스트·다른 표기 검색"><select id="knowledge-scope">${[['all','전체 · 타인 포함'],['local','내 분류 포함'],['shared','공유 분류 포함'],['watched','내 시청 기록 있음'],['unwatched','내 시청 기록 없음']].map(([k,v])=>`<option value="${k}" ${knowledgeScope===k?'selected':''}>${v}</option>`).join('')}</select></div><div id="knowledge-results">곡 정보를 불러오는 중…</div>`;}
+async function loadKnowledge(){const request=++knowledgeRequest;try{const r=await api(`/api/knowledge-songs?q=${encodeURIComponent(knowledgeQuery)}&scope=${knowledgeScope}&offset=${knowledgeOffset}&limit=40`);if(view!=='knowledge'||request!==knowledgeRequest)return;$('#knowledge-results').innerHTML=`<p class="note">전체 ${count(r.summary.all)}곡 · 내 분류 ${count(r.summary.local)} · 공유 분류 ${count(r.summary.shared)} · 내 기록 없음 ${count(r.summary.unwatched)}<br>내 분류와 공유 분류는 겹칠 수 있어요. 공유 곡을 보는 것만으로 추천이나 시청 기록에 추가되지는 않아요.</p><div class="song-list">${r.items.map(t=>`<div class="review-row"><div><strong>${esc(t.title)}</strong><p>${esc(t.artist)} · ${t.sources.map(s=>s==='local'?'내 분류':'공유 분류').join(' + ')} · ${t.history_records?`내 기록 ${count(t.history_records)}회`:'내 시청 기록 없음'}</p><p>${t.numbers.map(n=>`${brandNames[n.brand]||n.brand} ${esc(n.no)}`).join(' · ')||'노래방 번호 미연결'}</p><details><summary>표기·연결 영상 ${count(t.video_ids.length)}개 보기</summary><p>${t.aliases.slice(0,20).map(a=>esc(a.title)+' · '+esc(a.artist)).join('<br>')}</p>${t.video_ids.slice(0,50).map(vid=>`<a href="https://www.youtube.com/watch?v=${encodeURIComponent(vid)}" target="_blank" rel="noreferrer">영상 ${esc(vid)} ↗</a>`).join('<br>')}${t.video_ids.length>50?'<p>연결 영상은 앞의 50개를 표시해요.</p>':''}</details></div>${t.local_track_id?`<button class="button outline" data-action="detail" data-id="${t.local_track_id}">내 기록의 곡 보기</button>`:''}</div>`).join('')||empty('해당하는 곡이 없어요.')}</div><div class="pagination"><button class="button outline" data-action="knowledge-prev" ${knowledgeOffset===0?'disabled':''}>← 이전</button><span>${count(r.total)}곡 중 ${r.total?knowledgeOffset+1:0}–${Math.min(knowledgeOffset+40,r.total)}</span><button class="button outline" data-action="knowledge-next" ${knowledgeOffset+40>=r.total?'disabled':''}>다음 →</button></div>`;}catch(e){if(view==='knowledge')$('#knowledge-results').textContent=e.message;}}
 let S={tracks:[],stats:{},queue:[],catalogue:[],token:'',has_api_key:false};
 let view='recommend',brand='all',query='',sort='score',numberFilter='all',limit=40,reviewStatus='review',reviewOffset=0,reviewQuery='',reviewSort='frequency',reviewVersion=0;
 let toastTimer,pollTimer,refreshing=false;
@@ -159,7 +162,8 @@ function render(){
   const focused=document.activeElement?.id,start=document.activeElement?.selectionStart,end=document.activeElement?.selectionEnd;
   document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===view));
   $('#breadcrumb').innerHTML=`내 노래 서랍 <span>/</span> ${names[view]}`;
-  $('#main-content').innerHTML=({recommend,songs,artists,queue:queueView,review:()=>autoIdentityPanel()+reviewView(),data:()=>updatePanel()+autoIdentityPanel()+sharingPanel()+dataView()+reverseCataloguePanel()+decisionsPanel(),merge:mergeView}[view])();
+  $('#main-content').innerHTML=({recommend,songs,knowledge:knowledgeView,artists,queue:queueView,review:()=>autoIdentityPanel()+reviewView(),data:()=>updatePanel()+autoIdentityPanel()+sharingPanel()+dataView()+reverseCataloguePanel()+decisionsPanel(),merge:mergeView}[view])();
+  if(view==='knowledge')loadKnowledge();
   sidebarQueue();if(view==='review'){loadReview();if(S.recognition_job?.status==='running')startWholePoll();}if(view==='merge')loadMerges();
   if(focused&&$('#'+focused)){const input=$('#'+focused);input.focus();if(typeof start==='number'&&input.setSelectionRange)input.setSelectionRange(start,end);}
 }
@@ -310,6 +314,7 @@ document.addEventListener('click',async event=>{
     if(b.id==='upload-button'){await upload();return;}
     if(b.dataset.brand&&!b.dataset.action){brand=b.dataset.brand;limit=40;render();return;}
     const action=b.dataset.action,id=b.dataset.id;
+    if(action==='knowledge-prev'||action==='knowledge-next'){knowledgeOffset=Math.max(0,knowledgeOffset+(action==='knowledge-next'?40:-40));loadKnowledge();return;}
     if(action==='shared-conflicts'){const r=await api('/api/github-sync-status');$('#shared-connections').innerHTML=r.conflicts.map(v=>`<div class="panel"><strong>분류 충돌 · ${esc(v.video_id)}</strong><p class="small muted">직접 정한 내용은 유지돼요. 아래 표기를 선택하면 직접 확인한 곡으로 저장해요.</p>${v.candidates.map(c=>`<p>${esc(c.title)} · ${esc(c.artist)} ${c.local?'(내 기존 분류)':''} <button class="button outline" data-action="shared-conflict-select" data-video-id="${v.video_id}" data-title="${esc(c.title)}" data-artist="${esc(c.artist)}">이 표기로 저장</button></p>`).join('')}</div>`).join('')||'분류 충돌이 없어요.';return;}
     if(action==='shared-conflict-select'){await api('/api/correct',{video_id:b.dataset.videoId,title:b.dataset.title,artist:b.dataset.artist});b.closest('.panel').remove();toast('직접 확인한 곡으로 저장했어요.');return;}
     if(action==='shared-connections'){const r=await api('/api/shared-connections');$('#shared-connections').innerHTML=r.items.map(v=>`<div class="kv"><span>${esc(v.title)} · ${esc(v.artist)}<br><small>${esc(v.shared_basis)} ${esc(v.shared_kind)} ${esc(v.shared_performer)}</small></span><button class="button outline" data-action="shared-reject" data-video-id="${v.video_id}">공유 연결 취소</button></div>`).join('')||'적용된 공유 연결이 없어요.';$('#shared-connections').innerHTML+=r.rejected.map(v=>`<div class="kv"><span>자동 연결 취소됨 · ${esc(v.title)}</span><button class="button outline" data-action="shared-reject" data-undo="true" data-video-id="${v.video_id}">공유 연결 다시 허용</button></div>`).join('');return;}
@@ -382,12 +387,14 @@ document.addEventListener('click',async event=>{
 });
 let searchTimer;
 document.addEventListener('input',e=>{
+  if(e.target.id==='knowledge-search'){knowledgeQuery=e.target.value;knowledgeOffset=0;clearTimeout(searchTimer);searchTimer=setTimeout(loadKnowledge,200);return;}
   if(e.target.id==='bulk-minimum'){const n=Number(e.target.value);if(Number.isSafeInteger(n)&&n>0){bulkMinimum=n;$('#bulk-recognize-start').textContent=`${n}회 이상 알아서 확인`;}return;}
   if(e.target.id==='merge-query'){renderMergeTargets();return;}
   if(e.target.id==='song-search'){query=e.target.value;limit=40;clearTimeout(searchTimer);searchTimer=setTimeout(render,140);}
   if(e.target.id==='review-search'){reviewQuery=e.target.value;reviewOffset=0;clearTimeout(searchTimer);searchTimer=setTimeout(loadReview,180);}
 });
 document.addEventListener('change',e=>{
+  if(e.target.id==='knowledge-scope'){knowledgeScope=e.target.value;knowledgeOffset=0;loadKnowledge();return;}
   if(e.target.id==='sort-select'){sort=e.target.value;render();}
   if(e.target.id==='number-filter'){numberFilter=e.target.value;limit=40;render();}
   if(e.target.id==='review-sort'){reviewSort=e.target.value;reviewOffset=0;loadReview();}

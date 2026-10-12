@@ -5,6 +5,7 @@ from pathlib import Path
 import core, pipeline, recognition, song_identity, song_search, google_search, original_metadata, bulk_recognition, music_metadata, song_databases, user_backup, whole_recognition, reverse_catalogue, github_sync, catalogue_import, non_song, video_kind
 import app_update
 import auto_identity
+import knowledge_list
 
 TOKEN=secrets.token_urlsafe(32)
 JOB_LOCK=threading.Lock()
@@ -85,6 +86,9 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/github-login-status':return self.send(dict(github_sync.AUTH_STATE))
             if path=='/api/update-status':return self.send({k:v for k,v in app_update.STATE.items() if k!='stage'})
             if path=='/api/auto-identity-status':return self.send(core.get_state(db,'auto_identity_job',{'status':'idle'}))
+            if path=='/api/knowledge-songs':
+                offset=max(0,int(q.get('offset',['0'])[0]));limit=min(100,max(1,int(q.get('limit',['40'])[0])))
+                return self.send(knowledge_list.page(db,q.get('q',[''])[0],q.get('scope',['all'])[0],offset,limit))
             if path=='/api/shared-connections':
                 rows=db.execute("SELECT v.id,v.data FROM videos v JOIN video_activity a ON a.id=v.id WHERE json_extract(v.data,'$.classification.source')='shared' ORDER BY a.records DESC LIMIT 100").fetchall()
                 rejected=core.get_state(db,'shared_rejections',{},'user_state')
