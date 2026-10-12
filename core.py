@@ -12,6 +12,7 @@ ARTIST_GROUPS = [
     ['ずっと真夜中でいいのに。', 'ZUTOMAYO', 'ずっと真夜中でいいのに', 'ずっと真夜中でいいのに。 ZUTOMAYO'],
     ['結束バンド', 'kessoku band', '결속밴드'],
     ['稲葉曇', 'inabakumori', '이나바쿠모리'],
+    ['音乃瀬奏', 'Otonose Kanade'], ['てにをは', 'teniwoha'],
     ['ツミキ', 'tsumiki'], ['かいりきベア', 'Kairiki bear'],
     ['星街すいせい', 'Hoshimachi Suisei', '호시마치 스이세이'],
     ['なとり', 'natori'], ['青谷', 'AOYA', 'Aoya'],
@@ -27,6 +28,16 @@ def norm(s):
     return ''.join(c for c in unicodedata.normalize('NFKC', str(s)).casefold() if c.isalnum())
 @lru_cache(maxsize=10000)
 def canonical(s):
+    # Auto-generated credits repeat the same person for multiple roles.
+    # Deduplicate explicit credit separators, retaining distinct collaborators.
+    s=unicodedata.normalize('NFKC',str(s)).strip()
+    parts=[p.strip() for p in re.split(r'\s*[·•]\s*|\s+・\s+',s) if p.strip()]
+    if len(parts)>1:
+        unique=[];seen=set()
+        for part in parts:
+            value=canonical(part);key=norm(value)
+            if key not in seen:unique.append(value);seen.add(key)
+        return ' · '.join(unique)
     for group in ARTIST_GROUPS:
         if norm(s) in {norm(x) for x in group}: return group[0]
     return s.strip()
@@ -214,16 +225,19 @@ def number_artist(s):
     return value
 def match_track(track, catalogue, reference):
     exact=[];candidates=[]
+    import song_labels
+    title_keys={norm(t) for t in song_labels.variants(track['title'])}
     nt=norm(catalogue_title(track['title']));na=norm(canonical(track['artist']))
     hint=TITLE_HINTS.get(nt)
     for row in catalogue:
         rt=norm(catalogue_title(row.get('title','')))
-        if rt not in {nt,norm(hint) if hint else ''}:continue
+        row_keys={norm(t) for t in song_labels.variants(row.get('title',''))}
+        if not title_keys.intersection(row_keys) and rt!=(norm(hint) if hint else ''):continue
         match={'brand':row['brand'],'no':str(row['no']),'title':row['title'],'artist':row['singer'],'source':row.get('source','manana'),'release':row.get('release',''),'official_verified':False}
         release=row.get('release','')
         # Catalogues may include announced future entries. Do not offer these as available.
         if release and release[:10]>reference[:10]: match['reason']='수록 예정';candidates.append(match);continue
-        if rt==nt and norm(number_artist(row['singer']))==norm(number_artist(track['artist'])):
+        if title_keys.intersection(row_keys) and norm(number_artist(row['singer']))==norm(number_artist(track['artist'])):
             if norm(canonical(row['singer']))!=na:match['reason']='기본 아티스트 일치 · 피처링 표기 차이'
             exact.append(match)
         else:
@@ -231,7 +245,7 @@ def match_track(track, catalogue, reference):
             candidates.append(match)
     return exact,candidates
 def rebuild(db, affected_video=None):
-    import song_identity
+    import song_identity,song_labels
     aliases=get_state(db,"song_aliases",{},"user_state")
     events=defaultdict(list)
     for r in db.execute('SELECT video_id,time FROM events WHERE video_id IS NOT NULL'):events[r['video_id']].append(r['time'])
@@ -252,11 +266,17 @@ def rebuild(db, affected_video=None):
             affected_groups.add(tid)
     catalogue=[json.loads(r[0]) for r in db.execute('SELECT data FROM catalogue')]
     catalogue_by_title=defaultdict(list)
-    for row in catalogue:catalogue_by_title[norm(catalogue_title(row.get('title','')))].append(row)
+    for row in catalogue:
+        for label in song_labels.variants(row.get('title','')):catalogue_by_title[norm(label)].append(row)
     reference=db.execute('SELECT MAX(time) FROM events').fetchone()[0] or datetime.now(timezone.utc).isoformat()
     ref=timestamp(reference);groups={};statuses=Counter()
     for r in db.execute("SELECT * FROM videos" if affected_groups is None else "SELECT v.* FROM videos v JOIN video_browse b ON b.id=v.id WHERE b.status='song'").fetchall():
-        data=json.loads(r['data']);classification=classify(data,libraries.get(r['id']),corrections.get(r['id']),shared.get(r['id']))
+        data=json.loads(r['data']);previous=data.get('classification',{});classification=classify(data,libraries.get(r['id']),corrections.get(r['id']),shared.get(r['id']))
+        if previous.get('status')=='song' and classification.get('status')=='song' and norm(previous.get('title',''))==norm(classification.get('title','')) and norm(canonical(previous.get('artist','')))==norm(canonical(classification.get('artist',''))):
+            if previous.get('artist')!=classification.get('artist'):
+                labels=data.setdefault('classification_identity_aliases',[]);label={'title':previous['title'],'artist':previous['artist']}
+                if label not in labels:labels.append(label)
+        elif previous!=classification:data.pop('classification_identity_aliases',None)
         if data.get('classification')!=classification:
             data['classification']=classification;save_video(db,data)
         # Metadata-only reference videos are not watched recommendations.
@@ -268,9 +288,13 @@ def rebuild(db, affected_video=None):
         artist=canonical(classification['artist'])
         tid=song_identity.identity(title,artist)
         tid,title,artist=song_identity.resolve(original,title,artist,aliases) if original in aliases else song_identity.resolve(tid,title,artist,aliases)
+        artist=canonical(artist)
         if affected_groups is not None and tid not in affected_groups:continue
         g=groups.setdefault(tid,{'id':tid,'title':title,'artist':artist,'member_ids':[],'aliases':[],'video_ids':[],'dates':[],'sources':[]})
         g['member_ids']=list(dict.fromkeys(g['member_ids']+[original,tid]))
+        for old_label in data.get('classification_identity_aliases',[]):
+            member=song_identity.identity(old_label['title'],old_label['artist'])
+            if member not in g['member_ids']:g['member_ids'].append(member)
         label={'title':classification['title'],'artist':classification['artist']}
         if label not in g['aliases']:g['aliases'].append(label)
         for alternate in corrections.get(r['id'],{}).get('alternate_labels',[]):
@@ -279,7 +303,12 @@ def rebuild(db, affected_video=None):
             if alternate not in g['aliases']:g['aliases'].append(alternate)
             alias_id=song_identity.identity(alternate['title'],alternate['artist'])
             if alias_id not in g['member_ids']:g['member_ids'].append(alias_id)
+        for alternate in song_labels.video_labels(data,{'title':classification['title'],'artist':classification['artist'],'aliases':g['aliases']}):
+            if alternate not in g['aliases']:g['aliases'].append(alternate)
         g['video_ids'].append(r['id']);g['dates'].extend(events[r['id']]);g['sources'].append(classification['source'])
+    for member in aliases:
+        target=song_identity.resolve(member,'','',aliases)[0]
+        if target in groups and member not in groups[target]['member_ids']:groups[target]['member_ids'].append(member)
     if affected_groups is None:db.execute('DELETE FROM tracks')
     else:db.executemany('DELETE FROM tracks WHERE id=?',[(tid,) for tid in affected_groups])
     for g in groups.values():
@@ -290,11 +319,13 @@ def rebuild(db, affected_video=None):
         g['frequency_score']=.5*weight/(weight+5);g['recency_score']=.3*time_weight(last_age,30)
         g['base_score']=g['frequency_score']+g['recency_score']
         g['reference_time']=reference;g['days_since_last']=round(last_age,1)
-        nt=norm(catalogue_title(g['title']));hint=TITLE_HINTS.get(nt)
-        relevant=catalogue_by_title.get(nt,[])+(catalogue_by_title.get(norm(hint),[]) if hint else [])
-        g['numbers'],g['match_candidates']=match_track(g,relevant,datetime.now(timezone.utc).isoformat())
-        for alias in g['aliases']:
-            found,possible=match_track(alias,catalogue_by_title.get(norm(catalogue_title(alias['title'])),[]),datetime.now(timezone.utc).isoformat())
+        g['numbers']=[];g['match_candidates']=[]
+        for label in [g]+g['aliases']:
+            relevant=[]
+            for variant in song_labels.variants(label['title']):
+                key=norm(variant);relevant.extend(catalogue_by_title.get(key,[]))
+                if TITLE_HINTS.get(key):relevant.extend(catalogue_by_title.get(norm(TITLE_HINTS[key]),[]))
+            found,possible=match_track(label,relevant,datetime.now(timezone.utc).isoformat())
             for item in possible:
                 if item not in g['match_candidates']:g['match_candidates'].append(item)
             for item in found:
@@ -303,13 +334,20 @@ def rebuild(db, affected_video=None):
         manual=[item for member in g['member_ids'] for item in saved_numbers.get(member,[])]
         for item in manual:
             if item not in g['numbers']:g['numbers'].append(item)
+        unique_numbers={}
+        for number in g['numbers']:
+            key=(number['brand'],str(number['no']))
+            if key not in unique_numbers or number.get('source')=='manual':unique_numbers[key]=number
+        g['numbers']=list(unique_numbers.values())
+        available=set(unique_numbers)
+        g['match_candidates']=list({(n['brand'],str(n['no'])):n for n in g['match_candidates'] if (n['brand'],str(n['no'])) not in available}.values())
         g['sources']=sorted(set(g['sources']))
         db.execute('INSERT INTO tracks VALUES (?,?)',(g['id'],json.dumps(g,ensure_ascii=False)))
     if affected_groups is not None:
         statuses=dict(db.execute('SELECT b.status,count(*) FROM video_browse b JOIN video_activity a ON a.id=b.id GROUP BY b.status').fetchall())
     set_state(db,'classification_counts',dict(statuses));set_state(db,'reference_time',reference);db.commit()
 def tracks(db):
-    followed=set(get_state(db,'follows',[],'user_state'));hidden=set(get_state(db,'hidden',[],'user_state'))
+    followed={canonical(a) for a in get_state(db,'follows',[],'user_state')};hidden=set(get_state(db,'hidden',[],'user_state'))
     good=set(get_state(db,'karaoke_good',[],'user_state'))
     votes=get_state(db,'karaoke_ratings',{},'user_state')
     result=[]

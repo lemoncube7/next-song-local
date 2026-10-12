@@ -3,7 +3,7 @@ import json,re,hashlib,time
 from collections import Counter
 import core,non_song,recognition
 
-VERSION='video-kind-v3'
+VERSION='video-kind-v4'
 ARTISTS=set()
 ARTIST_ROWS=-1
 
@@ -31,7 +31,7 @@ def classify(v):
     elif category=='Gaming' and not re.search(non_song.MUSIC,raw) and re.search(r'(?i)minecraft|マイクラ|마인크래프트|gameplay|実況|공략|攻略',raw):kind='activity';confidence='corroborated';subtype='게임';reason='게임 카테고리와 플레이 형식이 일치 — 포함된 곡 정보는 별도로 보존'
     elif non_song.valid(v) and c.get('status')!='song':kind='activity';confidence='strong';subtype=CATEGORIES.get(category,'기타 활동');reason=v['non_song']['reason']
     elif c.get('status')=='song':kind='song';reason='기존에 연결된 곡 정보';confidence='registered'
-    elif re.search(r'(?i)歌ってみた|cover|커버|뮤직비디오|music video|official.*\bMV\b|lyric video|가사|歌詞|lyrics|演奏|연주|feat\.?|\bft\.|オリジナルMV|初音ミク|重音テト|GUMI',raw):kind='song';confidence='title';reason='곡·커버·연주 형식이 제목에 명시됨'
+    elif re.search(r'(?i)歌ってみた|cover|커버|뮤직비디오|music video|official.*\bMV\b|lyric video|가사|歌詞|lyrics|演奏|연주|オリジナルMV|初音ミク|重音テト|GUMI',raw):kind='song';confidence='title';reason='곡·커버·연주 형식이 제목에 명시됨'
     elif category and not re.search(non_song.MUSIC,raw) and re.search(r'(?i)레전드|근황|특징|정체|반응|몰카|후기|꿀팁|구별법|정상화|이유|왜|실수로|해봤|해버|ㅋㅋ|検証|あるある|ドッキリ|切り抜き|反応|作ってみた|#meme|#funny|#skit|tips|\bwhy\b|explained',raw):kind='activity';confidence='inferred';subtype=CATEGORIES.get(category,'이야기·클립');reason='제목의 설명·반응·상황 표현에 따른 추정 — 확정 비곡 판정은 아님'
     elif recognition.original_links(desc):kind='song';confidence='reference';reason='설명란에 명시된 원곡 링크 존재'
     elif not re.search(r'(?i)behind|비하인드|interview|인터뷰|리뷰|review|雑談',raw) and any(core.norm(core.number_artist(p)) in ARTISTS for p in re.split(r'\s*[/／]\s*|\s+-\s+',raw)) and len(re.split(r'\s*[/／]\s*|\s+-\s+',raw))==2:kind='song';confidence='structured_artist';reason='곡명·가수 구조와 수록곡 목록의 아티스트 표기 일치'
@@ -40,7 +40,14 @@ def classify(v):
     elif category in CATEGORIES:
         kind='activity';subtype=CATEGORIES[category];confidence='category';reason='YouTube 카테고리에 따른 활동 유형 추정 — 곡이 없다는 확정은 아님'
         if re.search(r'(?i)gameplay|実況|공략|마인크래프트|マイクラ|minecraft|레시피|요리법|브이로그|\bvlog\b|속보|뉴스|강의|강좌|리뷰|review|잡담|雑談|경기 하이라이트',raw):confidence='corroborated';reason='카테고리와 제목의 활동 형식이 함께 일치'
-    else:kind='insufficient';confidence='insufficient';reason='공개 메타데이터가 부족해 영상 형식 판별 불가'
+    else:
+        kind='insufficient';confidence='insufficient';reason='공개 메타데이터가 부족해 영상 형식 판별 불가'
+        if v.get('metadata_status') in ('unavailable','error'):
+            subtype='공개 정보 조회 실패';reason='공개 정보 조회 실패 — 삭제·비공개·접근 제한·일시 오류 여부 미확인'
+        elif not raw or raw.startswith('http'):
+            subtype='제목 없음';reason='기록에 영상 ID·URL만 있어 음악 여부 판정 불가'
+        elif v.get('metadata_status')=='pending':subtype='영상 정보 미조회'
+        else:subtype='정보는 있으나 형식 미판정'
     return {'version':VERSION,'kind':kind,'label':LABELS[kind],'subtype':subtype,'confidence':confidence,'reason':reason,'has_identified_song':c.get('status')=='song','has_music_cue':bool(re.search(non_song.MUSIC,raw)),'has_original_reference':bool(recognition.original_links(desc)),'fingerprint':fingerprint(v)}
 
 def get(v):

@@ -3,6 +3,7 @@ import argparse, csv, io, json, secrets, threading, traceback, urllib.parse, web
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import core, pipeline, recognition, song_identity, song_search, google_search, original_metadata, bulk_recognition, music_metadata, song_databases, user_backup, whole_recognition, reverse_catalogue, github_sync, catalogue_import, non_song, video_kind
+import app_update
 
 TOKEN=secrets.token_urlsafe(32)
 JOB_LOCK=threading.Lock()
@@ -39,6 +40,10 @@ def run_job(kind):
                 with WRITE_LOCK:core.set_state(db,'job',{'status':'running','stage':'non_song'});db.commit()
                 result=non_song.reconcile(db,WRITE_LOCK)
                 with WRITE_LOCK:core.set_state(db,'job',{'status':'complete','stage':'non_song','done':result['new_non_song'],'total':result['new_non_song']});db.commit()
+            elif kind=='auto_merge':
+                with WRITE_LOCK:
+                    result=song_identity.auto_merge(db)
+                    core.set_state(db,'job',{'status':'complete','stage':'auto_merge','done':result['merged'],'total':result['merged']});db.commit()
             elif kind=='video_kind':
                 with WRITE_LOCK:core.set_state(db,'job',{'status':'running','stage':'video_kind'});db.commit()
                 result=video_kind.run(db,WRITE_LOCK)
@@ -77,6 +82,7 @@ class Handler(BaseHTTPRequestHandler):
                     'github_sync':github_sync.public_config(),'github_sync_job':core.get_state(db,'github_sync_job',{}),'video_kind_job':core.get_state(db,'video_kind_job',{})})
             if path=='/api/github-sync-status':return self.send({'config':github_sync.public_config(),'job':core.get_state(db,'github_sync_job',{}),'conflicts':[{'video_id':r['id'],'candidates':json.loads(r['data'])} for r in db.execute('SELECT * FROM shared_conflicts LIMIT 100')]})
             if path=='/api/github-login-status':return self.send(dict(github_sync.AUTH_STATE))
+            if path=='/api/update-status':return self.send({k:v for k,v in app_update.STATE.items() if k!='stage'})
             if path=='/api/reverse-catalogue-job':return self.send(core.get_state(db,'reverse_catalogue_job',{}))
             if path=='/api/user-backup':
                 if self.headers.get('X-App-Token')!=TOKEN:return self.send({'error':'요청 인증 실패'},403)
@@ -125,6 +131,8 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/video':
                 v=core.video_data(db,q.get('id',[''])[0])
                 if not v:return self.send({'error':'영상을 찾지 못했습니다.'},404)
+                activity=db.execute('SELECT records,last_watch FROM video_activity WHERE id=?',(v['video_id'],)).fetchone()
+                if activity:v['history_records']=activity['records'];v['last_watch']=activity['last_watch']
                 return self.send(v)
             if path=='/api/export':
                 items={t['id']:t for t in core.tracks(db)};queue=song_identity.queue(db)
@@ -158,6 +166,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(result)
             if len(data)>1024*1024:raise ValueError('요청이 너무 큽니다.')
             payload=json.loads(data or '{}')
+            if path=='/api/update-check':
+                app_update.check();return self.send({k:v for k,v in app_update.STATE.items() if k!='stage'})
+            if path=='/api/update-download':return self.send(app_update.start())
+            if path=='/api/update-apply':
+                if any(lock.locked() for lock in (JOB_LOCK,RECOGNITION_JOB_LOCK,REVERSE_LOCK,WRITE_LOCK,github_sync.SYNC_LOCK,github_sync.AUTH_LOCK)):
+                    return self.send({'error':'저장·조회·동기화가 끝난 뒤 업데이트해 주세요. 다운로드한 파일은 유지돼요.'},409)
+                return self.send(app_update.apply(self.server.server_port))
             if path=='/api/github-sync-config':return self.send(github_sync.save_config(payload))
             if path=='/api/github-login':return self.send(github_sync.start_login())
             if path=='/api/github-sync':
@@ -316,7 +331,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send({'has_api_key':bool(load_key())})
                 if path=='/api/job':
                     kind=payload.get('kind')
-                    if kind not in ('metadata','catalogue','full_catalogue','non_song','video_kind'):raise ValueError('잘못된 작업입니다.')
+                    if kind not in ('metadata','catalogue','full_catalogue','non_song','video_kind','auto_merge'):raise ValueError('잘못된 작업입니다.')
                     if core.get_state(db,'job',{}).get('status')=='running' or not run_job(kind):return self.send({'error':'이미 조회 중입니다.'},409)
                     return self.send({'started':True})
             return self.send({'error':'Not found'},404)

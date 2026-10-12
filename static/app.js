@@ -2,6 +2,7 @@
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const brandNames={tj:'TJ',kumyoung:'금영',dam:'DAM',joysound:'JOYSOUND'};
+const searchKey=s=>String(s||'').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
 const sourceNames={library:'라이브러리',topic:'Topic 음원',auto_generated:'음원 설명',video_title:'제목에서 추정',manual:'직접 확인',auto_recognition:'자동 인식',shared:'공유된 확정 곡'};
 const names={recommend:'오늘의 추천',songs:'기록 속 노래',artists:'아티스트',queue:'부를 목록',review:'곡 확인하기',data:'데이터 가져오기',merge:'같은 곡 정리'};
 let S={tracks:[],stats:{},queue:[],catalogue:[],token:'',has_api_key:false};
@@ -51,7 +52,7 @@ function filtered({numbered=false,queue=false}={}){
     const hasNumber=t=>t.numbers.some(n=>brand==='all'||n.brand===brand);
     if(availability==='missing'&&!numbered)list=list.filter(t=>!hasNumber(t));
     else if(numbered||availability==='present'||brand!=='all')list=list.filter(hasNumber);
-    if(query){const q=query.toLocaleLowerCase();list=list.filter(t=>(t.title+' '+t.artist).toLocaleLowerCase().includes(q));}
+    if(query){const q=searchKey(query);list=list.filter(t=>[t,...(t.aliases||[])].some(a=>searchKey(a.title+' '+a.artist).includes(q)));}
     if(sort==='recent')list.sort((a,b)=>b.last_watch.localeCompare(a.last_watch));
     if(sort==='frequency')list.sort((a,b)=>b.history_records-a.history_records||b.score-a.score);
     if(sort==='least-frequency')list.sort((a,b)=>a.history_records-b.history_records||b.score-a.score);
@@ -124,6 +125,18 @@ function sharingPanel(){
   const c=S.github_sync||{},j=S.github_sync_job||{};
   return `<div id="sharing-panel" class="panel"><h3>친구와 확정 곡 정보 공유</h3><p class="small muted">시청 기록 파일·시청 시각·횟수·영상 설명·API 키는 공유하지 않아요. 직접 확인하거나 근거로 확정된 영상 ID·곡명·가수·별칭·노래방 번호만 비공개 GitHub 저장소에서 주고받아요. 공유된 영상 ID는 로컬 기록에 바로 연결하고, 직접 수정·제외한 결정과 서로 다른 분류는 유지해요.</p><button type="button" class="button outline" data-action="github-login">GitHub 계정 연결</button><p id="github-login-status" class="note"></p><form id="sharing-form"><label class="field">비공개 공유 저장소<input id="sharing-repo" value="${esc(c.repo||'')}" placeholder="owner/repo" required></label><label class="field">GitHub 토큰 (계정 연결을 사용하면 생략)<input id="sharing-token" type="password" autocomplete="off" placeholder="${c.has_token?'저장된 토큰 유지 — 변경할 때만 입력':'토큰을 입력하거나 GitHub CLI 로그인 사용'}"></label><label class="small muted"><input id="sharing-enabled" type="checkbox" ${c.enabled?'checked':''}> 분류 공유 켜기 · 실행 중 30분마다 동기화</label><p><button class="button outline" type="submit">공유 설정 저장</button> <button class="button primary" type="button" data-action="github-sync">지금 받아오고 내 분류 올리기</button></p></form><p id="sharing-status" class="note">${sharingStatus(j)}</p><p class="small muted">각자 자신의 GitHub 계정으로 로그인하세요. 친구는 저장소 초대를 먼저 수락해야 해요. 토큰은 이 PC에만 저장하며, 이 저장소의 Contents 읽기·쓰기 권한이 필요해요.</p><a href="https://github.com/notifications" target="_blank" rel="noreferrer">분류 저장소 초대 확인 ↗</a> · <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer">저장소 전용 토큰 만들기 ↗</a></div>`;
 }
+function updatePanel(){return `<div class="panel"><h3>앱 업데이트</h3><p class="small muted">새 버전을 설치하면 앱이 다시 실행돼요. 시청 기록과 설정은 유지해요.</p><button class="button outline" data-action="update-check">새 버전 확인</button> <button class="button primary" data-action="update-install">업데이트 설치</button><p id="update-status" class="note"></p></div>`;}
+async function installUpdate(){
+  await api('/api/update-download',{});
+  const tick=async()=>{
+    let r;try{r=await api('/api/update-status');}catch(e){toast(e.message);return;}
+    const p=$('#update-status');if(p)p.textContent=r.status==='error'?r.reason:r.status==='ready'?'다운로드 완료 · 재시작 준비 중…':r.status==='current'?`최신 버전 ${r.version}`:`업데이트 ${r.status==='downloading'?'다운로드 중':'확인 중'}…`;
+    if(r.status==='ready'){
+      try{await api('/api/update-apply',{});if(p)p.textContent='업데이트 설치 중… 앱이 다시 열려요.';let retries=0;const reconnect=setInterval(async()=>{try{await api('/api/update-status');clearInterval(reconnect);location.reload();}catch(e){if(++retries>100){clearInterval(reconnect);if(p)p.textContent='앱 폴더의 .updates/result.txt에서 업데이트 결과를 확인하세요.';}}},1500);}catch(e){if(p)p.textContent=e.message;toast(e.message);}return;
+    }
+    if(!['error','current'].includes(r.status))setTimeout(tick,1000);
+  };tick();
+}
 function sharingStatus(j){return `${{running:'동기화 중',complete:'동기화 완료',error:'동기화 실패'}[j.status]||'대기'} · 올린 확정 정보 ${count(j.exported_records)}개 · 받은 공유 정보 ${count(j.shared_identities)}개 · 분류 충돌 ${count(j.conflicts)}개${j.reason?' · '+esc(j.reason):''}`;}
 let sharingPoll;
 let githubLoginPoll;
@@ -144,7 +157,7 @@ function render(){
   const focused=document.activeElement?.id,start=document.activeElement?.selectionStart,end=document.activeElement?.selectionEnd;
   document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===view));
   $('#breadcrumb').innerHTML=`내 노래 서랍 <span>/</span> ${names[view]}`;
-  $('#main-content').innerHTML=({recommend,songs,artists,queue:queueView,review:reviewView,data:()=>sharingPanel()+dataView()+reverseCataloguePanel()+decisionsPanel(),merge:mergeView}[view])();
+  $('#main-content').innerHTML=({recommend,songs,artists,queue:queueView,review:reviewView,data:()=>updatePanel()+sharingPanel()+dataView()+reverseCataloguePanel()+decisionsPanel(),merge:mergeView}[view])();
   sidebarQueue();if(view==='review'){loadReview();if(S.recognition_job?.status==='running')startWholePoll();}if(view==='merge')loadMerges();
   if(focused&&$('#'+focused)){const input=$('#'+focused);input.focus();if(typeof start==='number'&&input.setSelectionRange)input.setSelectionRange(start,end);}
 }
@@ -156,7 +169,7 @@ async function loadLinkedVideoTitles(trackId){
       const vid=link.dataset.linkedVideo;
       let title=linkedVideoTitles.get(vid);
       try{
-        if(!title){const video=await api('/api/video?id='+encodeURIComponent(vid));title=video.title||video.history_title||`제목 정보 없음 · ${vid}`;linkedVideoTitles.set(vid,title);}
+        if(!title){const video=await api('/api/video?id='+encodeURIComponent(vid));title=video.title||video.history_title||`제목 정보 없음 · ${vid}`;const t=S.tracks.find(t=>t.id===trackId);const channel=searchKey((video.channel||video.history_channel||'').replace(/\s*-\s*Topic$|\s+official(?: channel)?$/i,''));const isCover=/cover|커버|歌ってみた/i.test(title);const isOriginal=!isCover&&t&&channel===searchKey(t.artist);title=(isCover?'[커버] ':isOriginal?'[원곡] ':'')+title+(video.history_records?` · 기록 ${video.history_records}회`:'');linkedVideoTitles.set(vid,title);}
       }catch(e){title=`영상 제목을 불러오지 못했어요 · ${vid}`;}
       if(link.isConnected&&$('#detail-content').dataset.trackId===trackId){link.textContent=title+' ↗';link.title=title;}
     }));
@@ -295,6 +308,8 @@ document.addEventListener('click',async event=>{
     if(b.id==='upload-button'){await upload();return;}
     if(b.dataset.brand&&!b.dataset.action){brand=b.dataset.brand;limit=40;render();return;}
     const action=b.dataset.action,id=b.dataset.id;
+    if(action==='update-check'){b.disabled=true;try{const r=await api('/api/update-check',{});$('#update-status').textContent=`현재 ${r.version} · 최신 ${r.latest}${r.available?' · 업데이트 가능':' · 최신 버전이에요'}${r.install_supported?'':' · 소스 실행 환경에서는 파일 교체가 필요해요'}`;}finally{b.disabled=false;}return;}
+    if(action==='update-install'){await installUpdate();return;}
     if(action==='github-login'){
       await api('/api/github-login',{});if(githubLoginPoll)clearInterval(githubLoginPoll);
       githubLoginPoll=setInterval(async()=>{const r=await api('/api/github-login-status'),p=$('#github-login-status');if(p)p.innerHTML=r.status==='error'?esc(r.reason||'GitHub 연결 오류'):r.code?`일회용 코드 <b>${esc(r.code)}</b>를 <a href="https://github.com/login/device" target="_blank" rel="noreferrer">GitHub 인증 페이지 ↗</a>에 입력하고 승인하세요.`:r.status==='complete'?'GitHub 계정 연결 완료':r.reason||'GitHub 인증 준비 중…';if(['complete','error'].includes(r.status)){clearInterval(githubLoginPoll);githubLoginPoll=null;}},1000);return;
@@ -384,8 +399,8 @@ for(const d of document.querySelectorAll('dialog'))d.addEventListener('click',e=
 $('#main-content').innerHTML='<div class="loading">내 기록 속 노래를 불러오는 중…</div>';
 refresh().catch(e=>{$('#main-content').innerHTML=`<div class="empty">앱에 연결하지 못했어요.<br>${esc(e.message)}<br>실행 창이 열려 있는지 확인해 주세요.</div>`;});
 
-function mergeView(){return intro('SONG IDENTITIES','같은 노래를 한곳으로.','비슷한 제목은 후보예요. 아티스트와 원곡·커버·버전을 확인한 뒤 연결하세요.')+`<div class="panel"><p class="small muted">번역 제목이나 별칭도 직접 찾아 연결할 수 있어요. 원래 영상과 시청 기록은 유지되고 연결은 되돌릴 수 있어요.</p><label class="field">연결할 곡<select id="merge-pick">${S.tracks.map(t=>`<option value="${t.id}">${esc(t.title)} · ${esc(t.artist)}</option>`).join('')}</select></label><button class="button outline" data-action="merge-open">다른 표기 찾기</button></div><div id="merge-results" class="loading">비슷한 제목을 찾는 중…</div>`;}
-async function loadMerges(){try{const r=await api('/api/merge-candidates');if(view!=='merge')return;$('#merge-results').className='';$('#merge-results').innerHTML=`<h2>비슷한 제목 후보</h2>${r.candidates.map(c=>{const a=S.tracks.find(t=>t.id===c.source),b=S.tracks.find(t=>t.id===c.target);return a&&b?`<div class="kv"><span>${esc(a.title)} ↔ ${esc(b.title)}<br><small>${esc(a.artist)} · ${esc(c.reason||'제목 표기 비교')} · 유사도 ${Math.round(c.similarity*100)}%</small></span><button class="button outline" data-action="merge-now" data-id="${a.id}" data-target="${b.id}" title="${esc(b.title)}에 합치기">합치기</button><button class="button different-song" data-action="different-song" data-id="${a.id}" data-target="${b.id}">다른 곡임</button></div>`:'';}).join('')||'<p class="muted">비슷한 제목 후보가 없어요. 위에서 곡을 직접 찾아 연결할 수 있어요.</p>'}<h2>다른 곡으로 표시한 항목</h2>${(r.different||[]).map(d=>`<div class="kv"><span>${esc(d.source_title)} ↔ ${esc(d.target_title)}</span><button class="button outline" data-action="different-undo" data-id="${d.source}" data-target="${d.target}">표시 되돌리기</button></div>`).join('')||'<p class="muted">아직 다른 곡으로 표시한 항목이 없어요.</p>'}<h2>연결 기록</h2>${r.history.slice().reverse().map(h=>`<div class="kv"><span>${esc(h.source_title)} → ${esc(h.target_title)}</span>${h.undone?'<span class="small muted">되돌림</span>':`<button class="button outline" data-action="merge-undo" data-id="${h.id}">되돌리기</button>`}</div>`).join('')||'<p class="muted">아직 직접 연결한 곡이 없어요.</p>'}`;}catch(e){if($('#merge-results'))$('#merge-results').textContent=e.message;}}
+function mergeView(){return intro('SONG IDENTITIES','같은 노래를 한곳으로.','비슷한 제목은 후보예요. 아티스트와 원곡·커버·버전을 확인한 뒤 연결하세요.')+`<div class="panel"><p class="small muted">번역 제목이나 별칭도 직접 찾아 연결할 수 있어요. 원래 영상과 시청 기록은 유지되고 연결은 되돌릴 수 있어요.</p><label class="field">연결할 곡<select id="merge-pick">${S.tracks.map(t=>`<option value="${t.id}">${esc(t.title)} · ${esc(t.artist)}</option>`).join('')}</select></label><button class="button outline" data-action="merge-open">다른 표기 찾기</button> <button class="button primary" data-action="job" data-kind="auto_merge">확실한 같은 곡 자동 정리</button></div><div id="merge-results" class="loading">비슷한 제목을 찾는 중…</div>`;}
+async function loadMerges(){try{const r=await api('/api/merge-candidates');if(view!=='merge')return;$('#merge-results').className='';$('#merge-results').innerHTML=`<h2>비슷한 제목 후보</h2>${r.candidates.map(c=>{const a=S.tracks.find(t=>t.id===c.source),b=S.tracks.find(t=>t.id===c.target);return a&&b?`<div class="kv"><span>${esc(a.title)} ↔ ${esc(b.title)}<br><small>${esc(a.artist)} · ${esc(c.reason||'제목 표기 비교')} · 유사도 ${Math.round(c.similarity*100)}%</small></span><button class="button outline" data-action="merge-now" data-id="${a.id}" data-target="${b.id}" title="${esc(b.title)}에 합치기">합치기</button><button class="button different-song" data-action="different-song" data-id="${a.id}" data-target="${b.id}">다른 곡임</button></div>`:'';}).join('')||'<p class="muted">비슷한 제목 후보가 없어요. 위에서 곡을 직접 찾아 연결할 수 있어요.</p>'}<h2>다른 곡으로 표시한 항목</h2>${(r.different||[]).map(d=>`<div class="kv"><span>${esc(d.source_title)} ↔ ${esc(d.target_title)}</span><button class="button outline" data-action="different-undo" data-id="${d.source}" data-target="${d.target}">표시 되돌리기</button></div>`).join('')||'<p class="muted">아직 다른 곡으로 표시한 항목이 없어요.</p>'}<h2>연결 기록</h2>${r.history.slice().reverse().map(h=>`<div class="kv"><span>${esc(h.source_title)} → ${esc(h.target_title)}${h.automatic?'<br><small>자동 정리 · 같은 아티스트의 제목 별칭 일치</small>':''}</span>${h.undone?'<span class="small muted">되돌림</span>':`<button class="button outline" data-action="merge-undo" data-id="${h.id}">되돌리기</button>`}</div>`).join('')||'<p class="muted">아직 직접 연결한 곡이 없어요.</p>'}`;}catch(e){if($('#merge-results'))$('#merge-results').textContent=e.message;}}
 function openMerge(id){id=id||$('#merge-pick')?.value;const t=S.tracks.find(t=>t.id===id);if(!t)return;$('#detail-dialog').close();$('#merge-source').value=id;$('#merge-origin').textContent=`${t.title} · ${t.artist} · 기록 ${t.history_records}회`;$('#merge-query').value='';renderMergeTargets();$('#merge-dialog').showModal();}
 function renderMergeTargets(){const source=$('#merge-source').value,q=$('#merge-query').value.toLocaleLowerCase();const a=S.tracks.find(t=>t.id===source);const list=S.tracks.filter(t=>t.id!==source&&(!q||(t.title+' '+t.artist).toLocaleLowerCase().includes(q))).sort((x,y)=>Number(y.artist===a?.artist)-Number(x.artist===a?.artist));$('#merge-target').innerHTML=list.map(t=>`<option value="${t.id}">${esc(t.title)} · ${esc(t.artist)} · 기록 ${t.history_records}회</option>`).join('');$('#merge-save').disabled=!list.length;}
 async function webSongSearch(button){

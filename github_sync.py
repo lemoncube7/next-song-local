@@ -116,7 +116,7 @@ def export_records(db):
         raw=v.get('title') or v.get('history_title','')
         if evidence!='manual' and re.search(r'(?i)歌枠|雑談|medley|メドレー|playlist|作業用|耐久|\blive\b|minecraft|マイクラ',raw):continue
         # Repeated author/lyricist credits in a Topic description are not a performer name.
-        artist=c['artist']
+        artist=core.canonical(c['artist'])
         if evidence=='native_music_metadata' and ' · ' in artist:
             channel=v.get('channel') or v.get('history_channel','')
             if channel.endswith(' - Topic'):artist=core.canonical(channel[:-8])

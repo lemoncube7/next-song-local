@@ -88,3 +88,42 @@ def candidates(db):
                 if re.findall(ordinal,at,re.I)!=re.findall(ordinal,bt,re.I):continue
                 if score>=.8:result.append({'source':a['id'],'target':b['id'],'similarity':round(score,3),'reason':'제목 안에 같은 별칭이 있어요' if same_alias else '제목 표기가 비슷해요'})
     return sorted(result,key=lambda x:-x['similarity'])[:100]
+
+
+def auto_merge(db):
+    """Batch reversible merges only for exact, evidenced aliases and same artist."""
+    import song_labels
+    items=core.tracks(db);rejections=list(core.get_state(db,'different_songs',{},'user_state').values())
+    groups={};changes=[];aliases=core.get_state(db,'song_aliases',{},'user_state')
+    history=core.get_state(db,'merge_history',[],'user_state')
+    for track in items:
+        if re.search(song_labels.VERSION,track['title']):continue
+        artist=core.norm(core.number_artist(track['artist']))
+        keys={core.norm(label) for a in [track]+track.get('aliases',[]) if core.norm(core.number_artist(a['artist']))==artist for label in song_labels.variants(a['title'])}
+        artist_names={core.norm(track['artist'])}
+        for family in core.ARTIST_GROUPS:
+            if any(core.norm(core.number_artist(n))==artist for n in family):artist_names.update(core.norm(n) for n in family)
+        def artist_only(key):
+            rest=key
+            while rest:
+                prefix=next((n for n in sorted(artist_names,key=len,reverse=True) if n and rest.startswith(n)),None)
+                if prefix is None:return False
+                rest=rest[len(prefix):]
+            return True
+        keys={key for key in keys if not artist_only(key)}
+        options=[t for t,k in groups.get(artist,[]) if keys.intersection(k) and not marked_different(track,t,rejections)]
+        if not options:groups.setdefault(artist,[]).append((track,keys));continue
+        target=options[0]
+        # A rejection against any member of the growing group must still win.
+        if marked_different(track,target,rejections):continue
+        change={'id':uuid.uuid4().hex,'source_title':track['title'],'target_title':target['title'],'previous':{},'members':track.get('member_ids',[track['id']]),'automatic':True,'reason':'같은 아티스트의 정확한 제목·병기 별칭 일치'}
+        for member in change['members']:
+            change['previous'][member]=aliases.get(member)
+            aliases[member]={'target':target['id'],'title':target['title'],'artist':target['artist'],'change':change['id']}
+        target.setdefault('member_ids',[target['id']]).extend(change['members'])
+        for t,k in groups[artist]:
+            if t['id']==target['id']:k.update(keys)
+        history.append(change);changes.append(change)
+    core.set_state(db,'song_aliases',aliases,'user_state');core.set_state(db,'merge_history',history,'user_state');db.commit()
+    if changes:core.rebuild(db)
+    return {'merged':len(changes),'changes':changes}
