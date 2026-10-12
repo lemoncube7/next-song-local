@@ -4,7 +4,7 @@ from datetime import datetime,timezone
 import core
 
 TYPES={'corrections':dict,'song_aliases':dict,'different_songs':dict,'merge_history':list,
-       'follows':list,'hidden':list,'queue':list,'karaoke_good':list,'karaoke_ratings':dict,'numbers':dict}
+       'follows':list,'hidden':list,'queue':list,'karaoke_good':list,'karaoke_ratings':dict,'numbers':dict,'shared_rejections':dict}
 
 def export(db):
     return {'format':'karaoke-user-decisions','version':1,'created_at':datetime.now(timezone.utc).isoformat(),

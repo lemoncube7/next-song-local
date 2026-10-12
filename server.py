@@ -85,6 +85,10 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/github-login-status':return self.send(dict(github_sync.AUTH_STATE))
             if path=='/api/update-status':return self.send({k:v for k,v in app_update.STATE.items() if k!='stage'})
             if path=='/api/auto-identity-status':return self.send(core.get_state(db,'auto_identity_job',{'status':'idle'}))
+            if path=='/api/shared-connections':
+                rows=db.execute("SELECT v.id,v.data FROM videos v JOIN video_activity a ON a.id=v.id WHERE json_extract(v.data,'$.classification.source')='shared' ORDER BY a.records DESC LIMIT 100").fetchall()
+                rejected=core.get_state(db,'shared_rejections',{},'user_state')
+                return self.send({'items':[{'video_id':r['id'],**{k:json.loads(r['data'])['classification'].get(k,'') for k in ('title','artist','shared_basis','shared_kind','shared_performer')}} for r in rows],'rejected':[{'video_id':vid,'title':(core.video_data(db,vid) or {}).get('title',vid)} for vid in list(rejected)[:100]]})
             if path=='/api/reverse-catalogue-job':return self.send(core.get_state(db,'reverse_catalogue_job',{}))
             if path=='/api/user-backup':
                 if self.headers.get('X-App-Token')!=TOKEN:return self.send({'error':'요청 인증 실패'},403)
@@ -168,6 +172,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(result)
             if len(data)>1024*1024:raise ValueError('요청이 너무 큽니다.')
             payload=json.loads(data or '{}')
+            if path=='/api/shared-reject':
+                vid=payload.get('video_id','');v=core.video_data(db,vid)
+                if not v:raise ValueError('영상을 찾지 못했습니다.')
+                with WRITE_LOCK:
+                    rejected=core.get_state(db,'shared_rejections',{},'user_state')
+                    if payload.get('undo'):rejected.pop(vid,None)
+                    else:rejected[vid]=True
+                    core.set_state(db,'shared_rejections',rejected,'user_state');core.rebuild(db,vid);db.commit()
+                return self.send({'ok':True})
             if path=='/api/auto-identity':
                 if JOB_LOCK.locked() or RECOGNITION_JOB_LOCK.locked() or REVERSE_LOCK.locked():return self.send({'error':'진행 중인 분류 작업이 끝나면 자동 처리해요.'},409)
                 return self.send({'started':auto_identity.start(WRITE_LOCK)})

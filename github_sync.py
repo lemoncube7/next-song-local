@@ -2,12 +2,15 @@
 import base64,hashlib,json,re,secrets,subprocess,threading,time,urllib.request,urllib.error,shutil
 from pathlib import Path
 import core
+import shared_knowledge
 
 FORMAT='next-song-classifications'
 DEFAULT_REPO=''
 SYNC_LOCK=threading.Lock()
 AUTH_STATE={'status':'idle'}
 AUTH_LOCK=threading.Lock()
+WAKE=threading.Event()
+def notify():WAKE.set()
 RECORD_KEYS={'video_id','title','artist','aliases','numbers','evidence'}
 
 def config_path():return core.ROOT/'data'/'github-sync.json'
@@ -81,6 +84,7 @@ def request(path,token,payload=None,missing_ok=False):
         with urllib.request.urlopen(req,timeout=30) as response:return json.load(response)
     except urllib.error.HTTPError as e:
         if missing_ok and e.code==404:return None
+        if e.code==404 and re.fullmatch(r'/repos/[^/]+/[^/]+',path):raise ValueError('GitHub 404 — 저장소 주소를 확인하고, 앱에 연결한 계정으로 비공개 저장소 초대를 수락하세요.') from None
         raise ValueError('GitHub HTTP '+str(e.code)+' — 저장소 접근 권한 또는 API 사용량을 확인하세요.') from None
 
 def validate_record(r):
@@ -151,8 +155,14 @@ def validate_document(path,doc):
 
 def apply_shared(db,write_lock):
     from collections import defaultdict
+    shared_knowledge.ensure(db)
+    graph_counts=defaultdict(int)
+    for row in db.execute('SELECT path FROM shared_knowledge'):
+        graph_counts[row[0].split('/')[1].split('-')[0]]+=1
     grouped=defaultdict(list)
-    for row in db.execute('SELECT data FROM shared_records'):grouped[json.loads(row[0])['video_id']].append(json.loads(row[0]))
+    for row in db.execute('SELECT path,data FROM shared_records'):
+        if row[0].startswith('classifications/') and graph_counts.get(row[0].split('/')[1],0)==16:continue
+        item=json.loads(row[1]);grouped[item['video_id']].append(item)
     accepted={};conflicts={}
     pair=lambda r:(core.norm(r['title']),core.norm(core.number_artist(r['artist'])))
     for vid,items in grouped.items():
@@ -172,8 +182,14 @@ def apply_shared(db,write_lock):
                     if x not in value[key]:value[key].append(x)
         accepted[vid]=value
     with write_lock:
+        before={r[0]:r[1] for r in db.execute("SELECT v.id,json_extract(v.data,'$.classification.title')||'|'||json_extract(v.data,'$.classification.artist') FROM videos v JOIN video_activity a ON a.id=v.id WHERE json_extract(v.data,'$.classification.source')='shared'")}
         db.execute('DELETE FROM shared_identities');db.execute('DELETE FROM shared_conflicts')
         db.execute("DELETE FROM catalogue WHERE json_extract(data,'$.source')='shared'")
+        for row in db.execute('SELECT data FROM shared_knowledge').fetchall():
+            for song in json.loads(row[0])['songs']:
+                for n in song['numbers']:
+                    entry={'brand':n['brand'],'no':n['no'],'title':song['title'],'singer':song['artist'],'source':'shared','release':''}
+                    db.execute('INSERT OR IGNORE INTO catalogue VALUES (?,?,?)',(n['brand'],n['no'],json.dumps(entry,ensure_ascii=False)))
         for vid,r in accepted.items():
             local=core.video_data(db,vid);c=local.get('classification',{}) if local else {}
             if c.get('status')=='song' and c.get('source')!='shared' and pair(c) not in {pair(a) for a in [r]+r['aliases']}:
@@ -184,9 +200,14 @@ def apply_shared(db,write_lock):
                 db.execute('INSERT OR IGNORE INTO catalogue VALUES (?,?,?)',(n['brand'],n['no'],json.dumps(row,ensure_ascii=False)))
         for vid,values in conflicts.items():db.execute('INSERT INTO shared_conflicts VALUES (?,?)',(vid,json.dumps(values,ensure_ascii=False)))
         db.commit();core.rebuild(db)
-    return {'shared_identities':db.execute('SELECT COUNT(*) FROM shared_identities').fetchone()[0],'conflicts':len(conflicts)}
+        after={};methods=defaultdict(int)
+        for row in db.execute("SELECT v.id,json_extract(v.data,'$.classification.title')||'|'||json_extract(v.data,'$.classification.artist'),json_extract(v.data,'$.classification.shared_basis') FROM videos v JOIN video_activity a ON a.id=v.id WHERE json_extract(v.data,'$.classification.source')='shared'"):
+            after[row[0]]=row[1];methods[row[2] or 'video_id']+=1
+    edits=core.get_state(db,'corrections',{},'user_state')
+    return {'shared_identities':db.execute('SELECT COUNT(*) FROM shared_identities').fetchone()[0],'conflicts':len(conflicts),'applied_to_watched':len(after),'new_connections':len(set(after)-set(before)),'updated_connections':sum(before[k]!=after[k] for k in set(before)&set(after)),'withdrawn_connections':len(set(before)-set(after)),'connection_methods':dict(methods),'protected_manual':sum(vid in edits and edits[vid].get('source')!='auto_recognition' for vid in accepted)}
 
 def sync(db,write_lock):
+    shared_knowledge.ensure(db)
     c=config()
     if not c.get('enabled'):raise ValueError('분류 공유를 먼저 켜 주세요.')
     token=credential(c);repo=c['repo'];meta=request('/repos/'+repo,token)
@@ -194,31 +215,37 @@ def sync(db,write_lock):
     if core.get_state(db,'github_sync_repo','')!=repo:
         with write_lock:
             db.execute('DELETE FROM shared_records');db.execute('DELETE FROM shared_identities');db.execute('DELETE FROM shared_conflicts')
+            db.execute('DELETE FROM shared_knowledge')
             core.set_state(db,'github_sync_blobs',{});core.set_state(db,'github_sync_published',{});core.set_state(db,'github_sync_repo',repo);db.commit()
     state={'status':'running','downloaded_files':0,'uploaded_files':0,'repo':repo,'started_at':time.time()}
     with write_lock:core.set_state(db,'github_sync_job',state);db.commit()
     tree=request('/repos/'+repo+'/git/trees/'+meta['default_branch']+'?recursive=1',token)
     if tree.get('truncated'):raise ValueError('공유 저장소 파일 목록이 너무 큽니다.')
-    cache=core.get_state(db,'github_sync_blobs',{});remote={x['path']:x['sha'] for x in tree.get('tree',[]) if re.fullmatch(r'classifications/[a-f0-9]{32}/[a-f0-9]\.json',x.get('path',''))}
+    cache=core.get_state(db,'github_sync_blobs',{});remote={x['path']:x['sha'] for x in tree.get('tree',[]) if re.fullmatch(r'classifications/[a-f0-9]{32}/[a-f0-9]\.json|knowledge/[a-f0-9]{32}-[a-f0-9]\.json',x.get('path',''))}
     for path,sha in remote.items():
-        if path.startswith('classifications/'+c['client_id']+'/'):
+        if path.startswith('classifications/'+c['client_id']+'/') or path.startswith('knowledge/'+c['client_id']+'-'):
             with write_lock:
                 db.execute('DELETE FROM shared_records WHERE path=?',(path,));cache[path]=sha;core.set_state(db,'github_sync_blobs',cache);db.commit()
+                db.execute('DELETE FROM shared_knowledge WHERE path=?',(path,));db.commit()
             continue
         if cache.get(path)==sha:continue
         blob=request('/repos/'+repo+'/git/blobs/'+sha,token)
         if blob.get('size',0)>3*1024*1024:raise ValueError('공유 파일 크기 제한 초과')
-        doc=json.loads(base64.b64decode(blob['content']));records=validate_document(path,doc)
+        doc=json.loads(base64.b64decode(blob['content']))
+        graph=path.startswith('knowledge/')
+        records=shared_knowledge.records(shared_knowledge.validate(path,doc)) if graph else validate_document(path,doc)
         with write_lock:
             db.execute('DELETE FROM shared_records WHERE path=?',(path,))
+            if graph:db.execute('INSERT OR REPLACE INTO shared_knowledge VALUES (?,?)',(path,json.dumps(doc,ensure_ascii=False)))
             for r in records:db.execute('INSERT INTO shared_records VALUES (?,?,?)',(path,r['video_id'],json.dumps(r,ensure_ascii=False)))
             cache[path]=sha;core.set_state(db,'github_sync_blobs',cache);db.commit()
         state['downloaded_files']+=1
     with write_lock:
-        for path in set(cache)-set(remote):db.execute('DELETE FROM shared_records WHERE path=?',(path,));cache.pop(path,None)
+        for path in set(cache)-set(remote):
+            db.execute('DELETE FROM shared_records WHERE path=?',(path,));db.execute('DELETE FROM shared_knowledge WHERE path=?',(path,));cache.pop(path,None)
         core.set_state(db,'github_sync_blobs',cache);db.commit()
     applied=apply_shared(db,write_lock)
-    own=export_records(db);uploads=documents(own,c['client_id']);published=core.get_state(db,'github_sync_published',{})
+    own=export_records(db);uploads=documents(own,c['client_id']);uploads.update(shared_knowledge.documents(db,own,c['client_id']));published=core.get_state(db,'github_sync_published',{})
     for path,doc in uploads.items():
         current=config()
         if not current.get('enabled') or current.get('repo')!=repo:
@@ -253,5 +280,7 @@ def scheduler(write_lock):
     def work():
         while True:
             if config().get('enabled'):start(write_lock)
-            time.sleep(1800)
+            WAKE.wait(300);WAKE.clear()
+            # Coalesce consecutive song saves without delaying local responses.
+            time.sleep(8)
     threading.Thread(target=work,daemon=True).start()
