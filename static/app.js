@@ -12,6 +12,8 @@ let recommendationLimit=14;
 let bulkMinimum=5;
 let reviewKind='all';
 const kindLabels={song:'곡 중심',collection:'여러 곡·음악 방송',music_explain:'음악 설명·레슨',music_possible:'음악 관련·형식 미확인',activity:'다른 활동 중심',insufficient:'정보 부족'};
+function autoIdentityPanel(){return `<div class="panel"><h3>연결 근거 자동 처리</h3><p class="small muted">앱 실행 중 3분마다 같은 원곡 링크·확정 곡·제목 별칭을 재사용해요. 원곡의 공개 정보는 중복 없이 묶어서 조회하고, 결과가 바뀌지 않은 영상은 다시 분석하지 않아요. 모델 API 비용은 없어요.</p><button class="button outline" data-action="auto-identity">지금 자동 처리</button><p id="auto-identity-status" class="note">상태 확인 중…</p></div>`;}
+setInterval(async()=>{const p=$('#auto-identity-status');if(!p)return;try{const j=await api('/api/auto-identity-status'),labels={original_unidentified:'원곡 미식별',multiple_references:'복수 원곡',identity_ambiguous:'곡 정보 후보 충돌',no_identity_evidence:'곡 식별 근거 부족'};p.textContent=j.status==='running'?'자동 처리 중…':j.status==='error'?`자동 처리 오류: ${j.reason}`:`누적 추가 연결 ${count(j.total_saved)}영상 · 이번 확인 ${count(j.checked)} · 재분석 생략 ${count(j.cached)} · 원곡 조회 대기 ${count(j.reference_pending)} · ${Object.entries(j.reasons||{}).filter(([k])=>labels[k]).map(([k,n])=>`${labels[k]} ${count(n)}`).join(' / ')}`;}catch(e){p.textContent=e.message;}},3000);
 function videoKindsPanel(){const j=S.video_kind_job||{};return `<div class="panel"><h3>영상 종류와 곡 식별은 별도로 봐요</h3><div class="type-summary">${Object.entries(kindLabels).map(([k,label])=>`<span>${label}<b>${count(j.counts?.[k])}</b></span>`).join('')}</div><p class="small muted">${count(j.done)} / ${count(j.total)}영상 분류 · 카테고리 단독 추정 ${count(j.confidence?.category)}개 · 제목 기반 추정 ${count(j.confidence?.inferred)}개는 확정 판정이 아니에요. 게임 영상의 명시된 곡 정보도 보존하며, 음악 방송은 설명의 곡 목록을 별도로 추출해요.</p><button class="button outline" data-action="job" data-kind="video_kind">전체 영상 종류 다시 분류</button></div>`;}
 let bulkRecognition={running:false,stop:false,total:0,done:0,saved:0,candidates:0,errors:0,localOnly:false};
 const date=s=>s?new Date(s).toLocaleDateString('ko-KR',{timeZone:'Asia/Seoul',year:'numeric',month:'2-digit',day:'2-digit'}):'—';
@@ -157,7 +159,7 @@ function render(){
   const focused=document.activeElement?.id,start=document.activeElement?.selectionStart,end=document.activeElement?.selectionEnd;
   document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===view));
   $('#breadcrumb').innerHTML=`내 노래 서랍 <span>/</span> ${names[view]}`;
-  $('#main-content').innerHTML=({recommend,songs,artists,queue:queueView,review:reviewView,data:()=>updatePanel()+sharingPanel()+dataView()+reverseCataloguePanel()+decisionsPanel(),merge:mergeView}[view])();
+  $('#main-content').innerHTML=({recommend,songs,artists,queue:queueView,review:()=>autoIdentityPanel()+reviewView(),data:()=>updatePanel()+autoIdentityPanel()+sharingPanel()+dataView()+reverseCataloguePanel()+decisionsPanel(),merge:mergeView}[view])();
   sidebarQueue();if(view==='review'){loadReview();if(S.recognition_job?.status==='running')startWholePoll();}if(view==='merge')loadMerges();
   if(focused&&$('#'+focused)){const input=$('#'+focused);input.focus();if(typeof start==='number'&&input.setSelectionRange)input.setSelectionRange(start,end);}
 }
@@ -308,6 +310,7 @@ document.addEventListener('click',async event=>{
     if(b.id==='upload-button'){await upload();return;}
     if(b.dataset.brand&&!b.dataset.action){brand=b.dataset.brand;limit=40;render();return;}
     const action=b.dataset.action,id=b.dataset.id;
+    if(action==='auto-identity'){await api('/api/auto-identity',{});toast('연결 근거를 재사용해 자동 처리해요.');return;}
     if(action==='update-check'){b.disabled=true;try{const r=await api('/api/update-check',{});$('#update-status').textContent=`현재 ${r.version} · 최신 ${r.latest}${r.available?' · 업데이트 가능':' · 최신 버전이에요'}${r.install_supported?'':' · 소스 실행 환경에서는 파일 교체가 필요해요'}`;}finally{b.disabled=false;}return;}
     if(action==='update-install'){await installUpdate();return;}
     if(action==='github-login'){

@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import core, pipeline, recognition, song_identity, song_search, google_search, original_metadata, bulk_recognition, music_metadata, song_databases, user_backup, whole_recognition, reverse_catalogue, github_sync, catalogue_import, non_song, video_kind
 import app_update
+import auto_identity
 
 TOKEN=secrets.token_urlsafe(32)
 JOB_LOCK=threading.Lock()
@@ -83,6 +84,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/github-sync-status':return self.send({'config':github_sync.public_config(),'job':core.get_state(db,'github_sync_job',{}),'conflicts':[{'video_id':r['id'],'candidates':json.loads(r['data'])} for r in db.execute('SELECT * FROM shared_conflicts LIMIT 100')]})
             if path=='/api/github-login-status':return self.send(dict(github_sync.AUTH_STATE))
             if path=='/api/update-status':return self.send({k:v for k,v in app_update.STATE.items() if k!='stage'})
+            if path=='/api/auto-identity-status':return self.send(core.get_state(db,'auto_identity_job',{'status':'idle'}))
             if path=='/api/reverse-catalogue-job':return self.send(core.get_state(db,'reverse_catalogue_job',{}))
             if path=='/api/user-backup':
                 if self.headers.get('X-App-Token')!=TOKEN:return self.send({'error':'요청 인증 실패'},403)
@@ -166,11 +168,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(result)
             if len(data)>1024*1024:raise ValueError('요청이 너무 큽니다.')
             payload=json.loads(data or '{}')
+            if path=='/api/auto-identity':
+                if JOB_LOCK.locked() or RECOGNITION_JOB_LOCK.locked() or REVERSE_LOCK.locked():return self.send({'error':'진행 중인 분류 작업이 끝나면 자동 처리해요.'},409)
+                return self.send({'started':auto_identity.start(WRITE_LOCK)})
             if path=='/api/update-check':
                 app_update.check();return self.send({k:v for k,v in app_update.STATE.items() if k!='stage'})
             if path=='/api/update-download':return self.send(app_update.start())
             if path=='/api/update-apply':
-                if any(lock.locked() for lock in (JOB_LOCK,RECOGNITION_JOB_LOCK,REVERSE_LOCK,WRITE_LOCK,github_sync.SYNC_LOCK,github_sync.AUTH_LOCK)):
+                if any(lock.locked() for lock in (JOB_LOCK,RECOGNITION_JOB_LOCK,REVERSE_LOCK,WRITE_LOCK,github_sync.SYNC_LOCK,github_sync.AUTH_LOCK,auto_identity.LOCK)):
                     return self.send({'error':'저장·조회·동기화가 끝난 뒤 업데이트해 주세요. 다운로드한 파일은 유지돼요.'},409)
                 return self.send(app_update.apply(self.server.server_port))
             if path=='/api/github-sync-config':return self.send(github_sync.save_config(payload))
@@ -355,6 +360,7 @@ def main():
     scan=core.connect();resume=core.get_state(scan,'recognition_job',{});scan.close()
     if resume.get('engine')==whole_recognition.VERSION and resume.get('status')=='running':start_whole_scan()
     github_sync.scheduler(WRITE_LOCK)
+    auto_identity.scheduler(WRITE_LOCK,lambda:any(lock.locked() for lock in (JOB_LOCK,RECOGNITION_JOB_LOCK,REVERSE_LOCK,github_sync.SYNC_LOCK)))
     if args.open:webbrowser.open(f'http://127.0.0.1:{args.port}')
     try:server.serve_forever()
     except KeyboardInterrupt:server.server_close()

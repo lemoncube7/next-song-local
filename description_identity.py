@@ -6,7 +6,9 @@ def clean(text):
  text=unicodedata.normalize('NFKC',text)
  text=re.sub(r'https?://\S+','',text)
  text=re.sub(r'(?i)\s*(?:\b(?:ft|feat)(?:\.\s*|\s+).*|【[^】]*】|\((?:IA|cover|official[^)]*)\))','',text)
- return text.strip(' \t「」『』[]-:：様')
+ text=text.strip(' \t「」『』[]-:：様')
+ if text.count('(')>text.count(')'):text=re.sub(r'\s*\($','',text)
+ return text
 
 def agrees(song,raw):
  key=core.norm(clean(song));return len(key)>=2 and key in core.norm(raw)
