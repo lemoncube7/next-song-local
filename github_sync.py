@@ -59,7 +59,7 @@ def start_login():
                 if not char:break
                 buffer=(buffer+char)[-1024:]
                 plain=re.sub(r'\x1b\[[0-9;]*[A-Za-z]','',buffer)
-                match=re.search(r'one-time code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})(?![A-Z0-9])',plain,re.I)
+                match=re.search(r'one-time code\s*[:(]\s*([A-Z0-9]{4}-[A-Z0-9]{4})(?![A-Z0-9])',plain,re.I)
                 if match and AUTH_STATE.get('status')=='starting':
                     AUTH_STATE.update(status='awaiting_approval',code=match[1]);timer.cancel()
             if p.wait()==0:AUTH_STATE.clear();AUTH_STATE.update(status='complete')
