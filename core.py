@@ -1,5 +1,5 @@
 """Local watch-history recommendation engine. Standard library only."""
-import csv, hashlib, io, json, math, re, sqlite3, unicodedata, zipfile, sys
+import csv, hashlib, io, json, math, re, sqlite3, unicodedata, zipfile, sys, urllib.parse
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -95,6 +95,7 @@ def connect(path=None):
     db.executescript('''
       CREATE TABLE IF NOT EXISTS events (key TEXT PRIMARY KEY, video_id TEXT, time TEXT NOT NULL, url TEXT, title TEXT);
       CREATE INDEX IF NOT EXISTS events_video ON events(video_id);
+      CREATE TABLE IF NOT EXISTS event_details (key TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS recognition_results (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS videos (id TEXT PRIMARY KEY, data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS library (id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -157,7 +158,7 @@ def import_bytes(db, content, filename):
     before=db.execute('SELECT COUNT(*) FROM events').fetchone()[0]
     skipped=0
     # HTML loses milliseconds; reconcile against pre-existing activities by second.
-    coarse={(r['video_id'] or r['url'] or r['title'],r['time'][:19]) for r in db.execute('SELECT video_id,url,title,time FROM events')} if html_report else set()
+    coarse={(r['video_id'] or r['url'] or r['title'],r['time'][:19]):r['key'] for r in db.execute('SELECT key,video_id,url,title,time FROM events')} if html_report else {}
     cached_videos={}
     for row in rows:
         if not isinstance(row,dict) or not row.get('time'): skipped+=1; continue
@@ -167,13 +168,22 @@ def import_bytes(db, content, filename):
         vid=m.group(1) if m else None
         # Same video/time or same nonvideo URL/time is the same activity across imports.
         key=hashlib.sha256((row['time']+'|'+(vid or url or row.get('title',''))).encode()).hexdigest()
-        if row.get('_time_precision')=='second' and ((vid or url or row.get('title','')),row['time'][:19]) in coarse:continue
+        if row.get('_time_precision')=='second':key=coarse.get(((vid or url or row.get('title','')),row['time'][:19]),key)
         db.execute('INSERT OR IGNORE INTO events VALUES (?,?,?,?,?)',(key,vid,row['time'],url,row.get('title','')))
+        products=row.get('products',[])
+        if not isinstance(products,list):products=[]
+        music_source=urllib.parse.urlparse(url).hostname=='music.youtube.com' or row.get('header','').casefold()=='youtube music' or any(str(p).casefold()=='youtube music' for p in products)
+        platform='youtube_music' if music_source else 'youtube'
+        previous=db.execute('SELECT data FROM event_details WHERE key=?',(key,)).fetchone()
+        if previous and json.loads(previous[0]).get('platform')=='youtube_music':platform='youtube_music';music_source=True
+        db.execute('INSERT OR REPLACE INTO event_details VALUES (?,?)',(key,json.dumps({'platform':platform},ensure_ascii=False)))
         if vid:
             if vid not in cached_videos:cached_videos[vid]=video_data(db,vid) or {'video_id':vid,'metadata_status':'pending'}
             data=cached_videos[vid]
             data['history_title']=clean_title(row.get('title',''))
             data['history_channel']=' '.join(x.get('name','') for x in row.get('subtitles',[]) if isinstance(x,dict))
+            data['source_platforms']=sorted(set(data.get('source_platforms',[])+[platform]))
+            if music_source:data['music_service_origin']=True
     for data in cached_videos.values():save_video(db,data)
     for row in library:
         vid=row.get('동영상 ID',row.get('Video ID','')).strip()
@@ -218,6 +228,8 @@ def classify(video, library=None, correction=None, shared=None):
     signals=bool(re.search(r'(?i)\bofficial\s+(?:music\s+)?video\b|\bofficial\s+mv\b|\blyric\s+video\b|\bcover\b|歌ってみた|歌枠|作詞|作曲|デモソング|music video|뮤직비디오|커버|가사|노래',title+'\n'+desc[:1800])) or bool(recognition.original_links(desc))
     if video.get('category')=='Music' or signals:
         return {'status':'review','reason':'음악 관련 영상 — 곡 정보 확인 필요'}
+    if video.get('music_service_origin'):
+        return {'status':'review','music_presence':'service_origin','reason':'YouTube Music 재생 출처 확인 — 곡명·아티스트 또는 음원 종류 확인 필요'}
     if not video.get('category'):
         return {'status':'unknown','reason':'카테고리 미확인 — 음악 여부 미판정'}
     return {'status':'other','reason':'음악 곡 정보가 확인되지 않은 영상'}
@@ -260,6 +272,14 @@ def rebuild(db, affected_video=None):
     aliases=get_state(db,"song_aliases",{},"user_state")
     events=defaultdict(list)
     for r in db.execute('SELECT video_id,time FROM events WHERE video_id IS NOT NULL'):events[r['video_id']].append(r['time'])
+    activity_details=defaultdict(dict)
+    for row in db.execute("""SELECT e.video_id,COALESCE(json_extract(d.data,'$.platform'),CASE WHEN e.video_id LIKE 'spotify:%' THEN 'spotify' WHEN e.url LIKE 'https://music.youtube.com/%' THEN 'youtube_music' ELSE 'youtube' END) AS platform,
+      count(*) AS records,sum(COALESCE(json_extract(d.data,'$.played_ms'),0)) AS played_ms,
+      sum(CASE WHEN json_type(d.data,'$.played_ms')='integer' THEN 1 ELSE 0 END) AS duration_known_records,
+      sum(CASE WHEN json_extract(d.data,'$.skipped')=1 THEN 1 ELSE 0 END) AS skipped_records,
+      sum(CASE WHEN json_type(d.data,'$.skipped') IN ('true','false') THEN 1 ELSE 0 END) AS skip_known_records
+      FROM events e LEFT JOIN event_details d ON d.key=e.key WHERE e.video_id IS NOT NULL GROUP BY e.video_id,platform"""):
+        activity_details[row['video_id']][row['platform']]={k:row[k] for k in ('records','played_ms','duration_known_records','skipped_records','skip_known_records')}
     libraries={r['id']:json.loads(r['data']) for r in db.execute('SELECT * FROM library')}
     shared={r['id']:json.loads(r['data']) for r in db.execute('SELECT * FROM shared_identities')}
     rejected=get_state(db,'shared_rejections',{},'user_state')
@@ -326,6 +346,12 @@ def rebuild(db, affected_video=None):
         for alternate in song_labels.video_labels(data,{'title':classification['title'],'artist':classification['artist'],'aliases':g['aliases']}):
             if alternate not in g['aliases']:g['aliases'].append(alternate)
         g['video_ids'].append(r['id']);g['dates'].extend(events[r['id']]);g['sources'].append(classification['source'])
+        for platform,details in activity_details[r['id']].items():
+            aggregate=g.setdefault('listening_details',{}).setdefault(platform,{k:0 for k in details})
+            for key,value in details.items():aggregate[key]+=value
+        if data.get('spotify_identity'):
+            recording={**data['spotify_identity'],'video_id':r['id']}
+            if recording not in g.setdefault('recordings',[]):g['recordings'].append(recording)
     for member in aliases:
         target=song_identity.resolve(member,'','',aliases)[0]
         if target in groups and member not in groups[target]['member_ids']:groups[target]['member_ids'].append(member)

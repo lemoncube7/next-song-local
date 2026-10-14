@@ -16,19 +16,20 @@ class ActivityParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.depth=0;self.outer=None;self.primary=None;self.seen_primary=False
-        self.parts=[];self.links=[];self.anchor=None;self.ready=deque();self.counts=Counter()
+        self.parts=[];self.links=[];self.anchor=None;self.ready=deque();self.counts=Counter();self.service='YouTube'
     def handle_starttag(self,tag,attrs):
         attrs=dict(attrs)
         if tag=='div':
             self.depth+=1;classes=attrs.get('class','').split()
             if 'outer-cell' in classes:
-                self.outer=self.depth;self.primary=None;self.seen_primary=False;self.parts=[];self.links=[];self.anchor=None
+                self.outer=self.depth;self.primary=None;self.seen_primary=False;self.parts=[];self.links=[];self.anchor=None;self.service='YouTube'
             elif self.outer and 'content-cell' in classes and 'mdl-cell--6-col' in classes and 'mdl-typography--text-right' not in classes and not self.seen_primary:
                 self.primary=self.depth;self.seen_primary=True
         if self.primary:
             if tag=='br':self.parts.append('\n')
             if tag=='a':self.anchor={'url':attrs.get('href',''),'parts':[]}
     def handle_data(self,data):
+        if self.outer and not self.primary and data.strip()=='YouTube Music':self.service='YouTube Music'
         if self.primary:
             self.parts.append(data)
             if self.anchor is not None:self.anchor['parts'].append(data)
@@ -51,7 +52,7 @@ class ActivityParser(HTMLParser):
         title=link['title'] if link else text.split('\n')[0]
         row={'time':date,'title':title,'titleUrl':link['url'] if link else '',
              'subtitles':[{'name':channel['title'],'url':channel['url']}] if channel else [],
-             '_time_precision':'second','_source':'my_activity_html'}
+             '_time_precision':'second','_source':'my_activity_html','products':[self.service]}
         self.ready.append(row);self.counts['watch_records']+=1
 
 def iter_rows(stream,report=None):

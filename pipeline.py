@@ -90,7 +90,7 @@ def catalogue_request(kind, value, brand):
     except Exception as e:return {'status':'error','error':type(e).__name__,'rows':[]}
 def enrich_api(db, key):
     """Official public metadata API, 50 IDs per request. API key never logged."""
-    vids=[r['id'] for r in db.execute('SELECT id,data FROM videos') if not json.loads(r['data']).get('api_checked')]
+    vids=[r['id'] for r in db.execute('SELECT id,data FROM videos') if re.fullmatch(r'[A-Za-z0-9_-]{11}',r['id']) and not json.loads(r['data']).get('api_checked')]
     total=len(vids);done=0
     categories={'10':'Music','20':'Gaming','24':'Entertainment','23':'Comedy','27':'Education','17':'Sports'}
     categories.update(core.get_state(db,'category_names',{}))
