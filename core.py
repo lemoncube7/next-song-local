@@ -151,6 +151,8 @@ def import_bytes(db, content, filename):
         import takeout_html
         rows=list(takeout_html.iter_rows(io.BytesIO(content),html_report))
     else: rows=json.loads(content.decode('utf-8-sig'))
+    import spotify_import
+    if spotify_import.supported(rows):return spotify_import.load(db,rows,filename)
     if not isinstance(rows,list): raise ValueError('시청 기록은 JSON 배열이어야 합니다.')
     before=db.execute('SELECT COUNT(*) FROM events').fetchone()[0]
     skipped=0
@@ -190,6 +192,9 @@ def classify(video, library=None, correction=None, shared=None):
     if correction:
         if correction.get('exclude'): return {'status':'excluded','reason':'직접 제외'}
         return {'status':'song','title':correction['title'],'artist':canonical(correction['artist']),'source':'auto_recognition' if correction.get('source')=='auto_recognition' else 'manual','reason':correction.get('reason') or '직접 확인한 곡'}
+    if video.get('source_platform')=='spotify':
+        song=video['spotify_identity']
+        return {'status':'song','title':song['title'],'artist':canonical(song['artist']),'source':'spotify','reason':'Spotify 기록의 곡명·아티스트'}
     if library and library.get('title') and library.get('artist'):
         return {'status':'song','title':library['title'],'artist':canonical(library['artist']),'source':'library','reason':'Takeout 라이브러리의 영상 ID 일치'}
     if shared:

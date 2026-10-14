@@ -106,6 +106,7 @@ def export_records(db):
     numbers={v:t['numbers'] for t in core.tracks(db) for v in t['video_ids']}
     records=[]
     for row in db.execute('SELECT id,data FROM videos'):
+        if row['id'].startswith('spotify:'):continue
         v=json.loads(row['data']);c=v.get('classification',{});vid=row['id']
         if c.get('status')!='song' or c.get('source')=='shared':continue
         edit=edits.get(vid);result=results.get(vid,{});t=result.get('track',{})
