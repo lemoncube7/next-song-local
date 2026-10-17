@@ -3,6 +3,7 @@ import base64,hashlib,json,re,secrets,subprocess,threading,time,urllib.request,u
 from pathlib import Path
 import core
 import shared_knowledge
+import friends
 
 FORMAT='next-song-classifications'
 DEFAULT_REPO=''
@@ -258,6 +259,12 @@ def sync(db,write_lock):
         if previous:payload['sha']=previous['sha']
         request('/repos/'+repo+'/contents/'+path,token,payload);published[path]=digest;state['uploaded_files']+=1
         with write_lock:core.set_state(db,'github_sync_published',published);db.commit()
+    if state['status']!='stopped':
+        try:state['friends']=friends.sync(db,write_lock,c,meta,tree,token,request)
+        except Exception as error:
+            note={'status':'error','reason':str(error) if isinstance(error,ValueError) else type(error).__name__}
+            state['friends']=note
+            with write_lock:core.set_state(db,'friends_job',note);db.commit()
     state.update(status='stopped' if state['status']=='stopped' else 'complete',exported_records=len(own),finished_at=time.time(),**applied)
     with write_lock:core.set_state(db,'github_sync_job',state);db.commit()
     return state

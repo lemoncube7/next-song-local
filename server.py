@@ -6,6 +6,8 @@ import core, pipeline, recognition, song_identity, song_search, google_search, o
 import app_update
 import auto_identity
 import knowledge_list
+import local_decision
+import friends
 
 TOKEN=secrets.token_urlsafe(32)
 JOB_LOCK=threading.Lock()
@@ -84,6 +86,10 @@ class Handler(BaseHTTPRequestHandler):
                     'github_sync':github_sync.public_config(),'github_sync_job':core.get_state(db,'github_sync_job',{}),'video_kind_job':core.get_state(db,'video_kind_job',{})})
             if path=='/api/github-sync-status':return self.send({'config':github_sync.public_config(),'job':core.get_state(db,'github_sync_job',{}),'conflicts':[{'video_id':r['id'],'candidates':json.loads(r['data'])} for r in db.execute('SELECT * FROM shared_conflicts LIMIT 100')]})
             if path=='/api/github-login-status':return self.send(dict(github_sync.AUTH_STATE))
+            if path=='/api/friends':return self.send(friends.status(db,github_sync.config().get('repo','')))
+            if path=='/api/friend-songs':
+                return self.send(friends.listing(db,github_sync.config().get('repo',''),q.get('login',[''])[0],q.get('q',[''])[0],
+                    max(0,int(q.get('offset',['0'])[0])),min(100,max(1,int(q.get('limit',['50'])[0])))))
             if path=='/api/update-status':return self.send({k:v for k,v in app_update.STATE.items() if k!='stage'})
             if path=='/api/auto-identity-status':return self.send(core.get_state(db,'auto_identity_job',{'status':'idle'}))
             if path=='/api/knowledge-songs':
@@ -244,16 +250,18 @@ class Handler(BaseHTTPRequestHandler):
                 if video.get('classification',{}).get('status') not in ('song','excluded'):
                     local=recognition.recognize(video,lookup=lambda i:core.video_data(db,i),tracks=core.tracks(db))
                     if local['status']!='recognized':database_result=song_databases.search(db,video,WRITE_LOCK)
+                video=core.video_data(db,vid)
+                result=recognition.recognize(video,[json.loads(r[0]) for r in db.execute('SELECT data FROM catalogue')],lookup=lambda original_id:core.video_data(db,original_id),tracks=core.tracks(db))
+                result['original_metadata']=metadata
+                if database_result:
+                    if database_result['status']=='recognized':result={**database_result,'original_metadata':metadata}
+                    else:
+                        result['candidates']=recognition.merge_candidates(result['candidates']+database_result['candidates'])
+                        if result['candidates']:result['status']='ambiguous'
+                        result['databases']=database_result['databases']
+                result=local_decision.enhance(db,video,result)
                 with WRITE_LOCK:
                     video=core.video_data(db,vid)
-                    result=recognition.recognize(video,[json.loads(r[0]) for r in db.execute('SELECT data FROM catalogue')],lookup=lambda original_id:core.video_data(db,original_id),tracks=core.tracks(db))
-                    result['original_metadata']=metadata
-                    if database_result:
-                        if database_result['status']=='recognized':result={**database_result,'original_metadata':metadata}
-                        else:
-                            result['candidates']=recognition.merge_candidates(result['candidates']+database_result['candidates'])
-                            if result['candidates']:result['status']='ambiguous'
-                            result['databases']=database_result['databases']
                     if result['status']=='recognized':
                         track=result['track'];edits=core.get_state(db,'corrections',{},'user_state')
                         result['saved']=False
@@ -275,6 +283,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif metadata.get('reason'):result['reason']+=' '+metadata['reason']
                 with WRITE_LOCK:bulk_recognition.store_result(db,vid,result);db.commit()
                 return self.send(result)
+            if path=='/api/friends':
+                with WRITE_LOCK:result=friends.save_settings(db,payload)
+                github_sync.notify();return self.send(result)
             with WRITE_LOCK:
                 if path=='/api/different-songs':
                     song_identity.different(db,payload.get('source',''),payload.get('target',''),payload.get('restore',False));return self.send({'ok':True})

@@ -3,7 +3,7 @@ import hashlib,json,os,re,shutil,subprocess,sys,threading,time,urllib.request,zi
 from pathlib import Path
 import core
 
-VERSION='0.1.10'
+VERSION='0.1.11'
 REPO='lemoncube7/next-song-local'
 STATE={'status':'idle','version':VERSION}
 LOCK=threading.Lock()

@@ -165,6 +165,8 @@ def run(db,load_key,write_lock,stop):
                             if found['status']=='recognized':result=found
                             else:result={**result,'candidates':recognition.merge_candidates(result.get('candidates',[])+found.get('candidates',[])),'databases':found.get('databases',[])}
                             result=resolve(v,result)
+                        import local_decision
+                        result=local_decision.enhance(db,v,result)
                         stage='saved' if result['status']=='recognized' else 'candidate' if result.get('candidates') else 'unresolved'
                 except Exception as e:result={'status':'error','candidates':[],'reason':type(e).__name__};stage='error'
                 pending.append((vid,result,stage));flush(rebuild=stage=='saved')

@@ -4,7 +4,26 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const brandNames={tj:'TJ',kumyoung:'금영',dam:'DAM',joysound:'JOYSOUND'};
 const searchKey=s=>String(s||'').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
 const sourceNames={spotify:'Spotify 기록',library:'라이브러리',topic:'Topic 음원',auto_generated:'음원 설명',video_title:'제목에서 추정',manual:'직접 확인',auto_recognition:'자동 인식',shared:'공유된 확정 곡'};
-const names={recommend:'오늘의 추천',songs:'기록 속 노래',knowledge:'분류된 곡',artists:'아티스트',queue:'부를 목록',review:'곡 확인하기',data:'데이터 가져오기',merge:'같은 곡 정리'};
+const names={recommend:'오늘의 추천',songs:'기록 속 노래',knowledge:'분류된 곡',friends:'친구 · 함께 부를 곡',artists:'아티스트',queue:'부를 목록',review:'곡 확인하기',data:'데이터 가져오기',merge:'같은 곡 정리'};
+let friendState=null,friendLogin='',friendMode='common',friendQuery='',friendOffset=0,friendRequest=0;
+function friendsView(){return intro('SING TOGETHER','친구와 함께 부를 노래.','친구가 공유한 곡을 보고, 서로 알고 있는 노래를 찾아보세요.')+'<div id="friends-content">친구 정보를 불러오는 중…</div>';}
+function friendNumbers(items){return (items||[]).map(n=>`${esc(brandNames[n.brand]||n.brand)} ${esc(n.no)}`).join(' · ')||'번호 미연결';}
+async function loadFriends(){
+ const request=++friendRequest;
+ try{
+  const r=await api('/api/friends');if(view!=='friends'||request!==friendRequest)return;friendState=r;
+  const states={accepted:'친구',incoming:'받은 요청',pending:'상대 등록 대기'};
+  $('#friends-content').innerHTML=`<div class="panel"><h3>내 친구 설정</h3><p class="note">연결 계정: ${esc(r.account||'다음 동기화에서 확인해요')} · ${esc(r.repo||'공유 저장소 미설정')}</p><form id="friends-settings"><label class="field">표시 이름<input id="friends-display" maxlength="80" value="${esc(r.settings.display_name)}" placeholder="친구에게 보여줄 이름"></label><label class="small"><input id="friends-share" type="checkbox" ${r.settings.share_songs?'checked':''}> 내 기록 속 곡 목록 공유</label><p class="small muted">곡명·아티스트·별칭·노래방 번호만 공유해요. 시청 기록 원본·시각·횟수·영상 ID는 보내지 않아요. 공유 목록은 비공개 저장소 참여자 모두가 읽을 수 있으며, 앱에서는 서로 친구 등록을 마친 뒤 보여줘요. 공유 해제는 다음 동기화에서 현재 목록을 비우지만 GitHub의 과거 커밋 이력에는 남을 수 있어요.</p><button class="button outline" type="submit">친구 설정 저장</button></form><form id="friend-add-form" class="dialog-actions"><label class="field">친구 GitHub 사용자명<input id="friend-add-login" maxlength="39" placeholder="예: JUNGCCI" required></label><button class="button primary" type="submit">친구 추가</button></form><p class="small muted">상대도 내 GitHub 사용자명을 추가하면 친구가 돼요. 두 사람 모두 같은 비공개 공유 저장소에 접근할 수 있어야 해요.</p><div class="dialog-actions"><button class="button outline" data-action="friends-sync">지금 동기화</button><button class="button outline" data-view="data">GitHub 연결·저장소 설정</button><button class="button subtle" data-action="friends-refresh">새로 확인</button></div><p id="friends-sync-status" class="note">${r.job.status==='error'?esc(r.job.reason):r.job.finished_at?'마지막 친구 동기화: '+new Date(r.job.finished_at*1000).toLocaleString('ko-KR'):'친구 설정을 저장하고 동기화해 주세요.'}</p></div><div class="panel"><h3>친구 ${r.friends.filter(f=>f.state==='accepted').length}명</h3>${r.friends.map(f=>`<div class="kv"><div><strong>${esc(f.display_name||f.login)}</strong><p class="small">@${esc(f.login)} · ${states[f.state]}${f.state==='accepted'?' · '+(f.share_songs?count(f.song_count)+'곡 공유':'곡 목록 비공개'):''}</p></div><div class="dialog-actions">${f.state==='incoming'?`<button class="button primary" data-action="friend-accept" data-login="${esc(f.login)}">수락</button>`:''}${f.state==='accepted'?`<button class="button outline" data-action="friend-open" data-login="${esc(f.login)}">곡·함께 부르기</button>`:''}<button class="button subtle" data-action="friend-remove" data-login="${esc(f.login)}">${f.state==='incoming'?'거절':'삭제'}</button></div></div>`).join('')||'<p class="muted">아직 등록한 친구가 없어요. GitHub 사용자명으로 추가해 보세요.</p>'}</div><div id="friend-shelf"></div>`;
+  if(friendLogin&&r.friends.some(f=>f.login===friendLogin&&f.state==='accepted'))await loadFriendShelf();
+ }catch(e){if(view==='friends'&&$('#friends-content'))$('#friends-content').textContent=e.message;}
+}
+async function loadFriendShelf(){
+ const login=friendLogin;const request=++friendRequest;
+ const r=await api(`/api/friend-songs?login=${encodeURIComponent(login)}&q=${encodeURIComponent(friendQuery)}&offset=${friendOffset}&limit=40`);
+ if(view!=='friends'||login!==friendLogin||request!==friendRequest)return;
+ const rows=friendMode==='common'?r.common.filter(s=>!friendQuery||(s.title+' '+s.artist).toLocaleLowerCase().includes(friendQuery.toLocaleLowerCase())):r.songs;
+ $('#friend-shelf').innerHTML=`<div class="panel"><h3>@${esc(login)} · ${friendMode==='common'?'함께 부를 곡':'공유한 곡 목록'}</h3><div class="dialog-actions"><button class="button ${friendMode==='common'?'primary':'outline'}" data-action="friend-mode" data-mode="common">함께 부를 곡 ${count(r.common.length)}</button><button class="button ${friendMode==='songs'?'primary':'outline'}" data-action="friend-mode" data-mode="songs">친구의 곡 ${count(r.total)}</button></div><form id="friend-search-form" class="toolbar"><input id="friend-search" value="${esc(friendQuery)}" placeholder="곡명·가수 검색"><button class="button outline" type="submit">검색</button></form><p class="small muted">함께 부를 곡은 두 사람 목록의 곡명·아티스트·별칭 또는 노래방 번호를 대조한 후보예요. 친구 목록을 보는 것만으로 내 기록이나 추천에 추가하지 않아요.</p>${r.reason?`<p class="note">${esc(r.reason)}</p>`:''}${rows.map(s=>`<div class="kv"><div><strong>${esc(s.title)}</strong><p>${esc(s.artist)}</p><p class="small">${friendNumbers(friendMode==='common'?s.common_numbers:s.numbers)}</p>${s.basis?`<p class="small muted">${esc(s.basis)}${s.friend_title!==s.title?' · 친구 표기: '+esc(s.friend_title):''}</p>`:''}</div>${s.local_id?`<button class="button outline" data-action="queue" data-id="${esc(s.local_id)}">${S.queue.includes(s.local_id)?'부를 목록에서 빼기':'부를 목록에 담기'}</button>`:''}</div>`).join('')||'<p class="muted">표시할 곡이 없어요. 서로 곡 목록을 공유하고 동기화했는지 확인해 주세요.</p>'}${friendMode==='songs'?`<div class="pagination"><button class="button outline" data-action="friend-page" data-step="-1" ${friendOffset===0?'disabled':''}>← 이전</button><span>${friendOffset+1}–${Math.min(friendOffset+40,r.total)} / ${count(r.total)}</span><button class="button outline" data-action="friend-page" data-step="1" ${friendOffset+40>=r.total?'disabled':''}>다음 →</button></div>`:''}</div>`;
+}
 let knowledgeQuery='',knowledgeScope='all',knowledgeOffset=0,knowledgeRequest=0;
 function knowledgeView(){return intro('SHARED SONG KNOWLEDGE','분류된 곡 · 함께 모은 노래 정보.','내 시청 기록과 관계없이, 이 PC에서 분류한 곡과 동기화로 받은 다른 사람의 곡 정보를 볼 수 있어요.')+`<div class="toolbar"><input class="search" id="knowledge-search" value="${esc(knowledgeQuery)}" placeholder="곡명·아티스트·다른 표기 검색"><select id="knowledge-scope">${[['all','전체 · 타인 포함'],['local','내 분류 포함'],['shared','공유 분류 포함'],['watched','내 시청 기록 있음'],['unwatched','내 시청 기록 없음']].map(([k,v])=>`<option value="${k}" ${knowledgeScope===k?'selected':''}>${v}</option>`).join('')}</select></div><div id="knowledge-results">곡 정보를 불러오는 중…</div>`;}
 async function loadKnowledge(){const request=++knowledgeRequest;try{const r=await api(`/api/knowledge-songs?q=${encodeURIComponent(knowledgeQuery)}&scope=${knowledgeScope}&offset=${knowledgeOffset}&limit=40`);if(view!=='knowledge'||request!==knowledgeRequest)return;$('#knowledge-results').innerHTML=`<p class="note">전체 ${count(r.summary.all)}곡 · 내 분류 ${count(r.summary.local)} · 공유 분류 ${count(r.summary.shared)} · 내 기록 없음 ${count(r.summary.unwatched)}<br>내 분류와 공유 분류는 겹칠 수 있어요. 공유 곡을 보는 것만으로 추천이나 시청 기록에 추가되지는 않아요.</p><div class="song-list">${r.items.map(t=>`<div class="review-row"><div><strong>${esc(t.title)}</strong><p>${esc(t.artist)} · ${t.sources.map(s=>s==='local'?'내 분류':'공유 분류').join(' + ')} · ${t.history_records?`내 기록 ${count(t.history_records)}회`:'내 시청 기록 없음'}</p><p>${t.numbers.map(n=>`${brandNames[n.brand]||n.brand} ${esc(n.no)}`).join(' · ')||'노래방 번호 미연결'}</p><details><summary>표기·연결 영상 ${count(t.video_ids.length)}개 보기</summary><p>${t.aliases.slice(0,20).map(a=>esc(a.title)+' · '+esc(a.artist)).join('<br>')}</p>${t.video_ids.slice(0,50).map(vid=>`<a href="https://www.youtube.com/watch?v=${encodeURIComponent(vid)}" target="_blank" rel="noreferrer">영상 ${esc(vid)} ↗</a>`).join('<br>')}${t.video_ids.length>50?'<p>연결 영상은 앞의 50개를 표시해요.</p>':''}</details></div>${t.local_track_id?`<button class="button outline" data-action="detail" data-id="${t.local_track_id}">내 기록의 곡 보기</button>`:''}</div>`).join('')||empty('해당하는 곡이 없어요.')}</div><div class="pagination"><button class="button outline" data-action="knowledge-prev" ${knowledgeOffset===0?'disabled':''}>← 이전</button><span>${count(r.total)}곡 중 ${r.total?knowledgeOffset+1:0}–${Math.min(knowledgeOffset+40,r.total)}</span><button class="button outline" data-action="knowledge-next" ${knowledgeOffset+40>=r.total?'disabled':''}>다음 →</button></div>`;}catch(e){if(view==='knowledge')$('#knowledge-results').textContent=e.message;}}
@@ -162,8 +181,9 @@ function render(){
   const focused=document.activeElement?.id,start=document.activeElement?.selectionStart,end=document.activeElement?.selectionEnd;
   document.querySelectorAll('.nav').forEach(n=>n.classList.toggle('active',n.dataset.view===view));
   $('#breadcrumb').innerHTML=`내 노래 서랍 <span>/</span> ${names[view]}`;
-  $('#main-content').innerHTML=({recommend,songs,knowledge:knowledgeView,artists,queue:queueView,review:()=>autoIdentityPanel()+reviewView(),data:()=>updatePanel()+autoIdentityPanel()+sharingPanel()+dataView()+reverseCataloguePanel()+decisionsPanel(),merge:mergeView}[view])();
+  $('#main-content').innerHTML=({recommend,songs,knowledge:knowledgeView,friends:friendsView,artists,queue:queueView,review:()=>autoIdentityPanel()+reviewView(),data:()=>updatePanel()+autoIdentityPanel()+sharingPanel()+dataView()+reverseCataloguePanel()+decisionsPanel(),merge:mergeView}[view])();
   if(view==='knowledge')loadKnowledge();
+  if(view==='friends')loadFriends();
   sidebarQueue();if(view==='review'){loadReview();if(S.recognition_job?.status==='running')startWholePoll();}if(view==='merge')loadMerges();
   if(focused&&$('#'+focused)){const input=$('#'+focused);input.focus();if(typeof start==='number'&&input.setSelectionRange)input.setSelectionRange(start,end);}
 }
@@ -243,7 +263,7 @@ async function saveReviewInformation(candidate=null){
 }
 async function showRecognitionResult(vid,result){
   result.candidates=(await api('/api/recognition-candidates',{candidates:result.candidates})).candidates;
-  await review(vid);$('#recognition-result').textContent=result.reason;
+  await review(vid);$('#recognition-result').textContent=result.reason+(result.local_decision?.status==='unavailable'||result.local_decision?.status==='busy'?' '+result.local_decision.reason:'');
   $('#recognition-candidates').innerHTML=result.candidates.map((c,i)=>`<div class="panel"><button type="button" class="button outline" data-action="recognition-candidate" data-index="${i}">${esc(c.title)} · ${esc(c.artist)} — 이 곡으로 저장</button><p class="small muted">${esc(c.provider||(c.music_card?'YouTube 음악 정보':'영상·로컬 곡 정보'))} · ${esc(c.reason||'곡명·아티스트 대조 필요')}</p>${c.alternate_labels?.length>1?`<p class="small muted">다른 표기: ${c.alternate_labels.map(a=>esc(a.title)+' · '+esc(a.artist)).join(' / ')}</p>`:''}${c.url?`<a href="${esc(c.url)}" target="_blank" rel="noreferrer">근거 확인 ↗</a>`:''}</div>`).join('');
   $('#recognition-candidates')._candidates=result.candidates;
   if(result.google){
@@ -323,6 +343,17 @@ document.addEventListener('click',async event=>{
     if(b.id==='upload-button'){await upload();return;}
     if(b.dataset.brand&&!b.dataset.action){brand=b.dataset.brand;limit=40;render();return;}
     const action=b.dataset.action,id=b.dataset.id;
+    if(action==='friends-refresh'){await loadFriends();return;}
+    if(action==='friends-sync'){await api('/api/github-sync',{});toast('친구·분류 정보를 동기화해요. 완료 후 새로 확인을 눌러 주세요.');return;}
+    if(action==='friend-open'){friendLogin=b.dataset.login;friendOffset=0;friendQuery='';await loadFriendShelf();return;}
+    if(action==='friend-mode'){friendMode=b.dataset.mode;friendOffset=0;await loadFriendShelf();return;}
+    if(action==='friend-page'){friendOffset=Math.max(0,friendOffset+40*Number(b.dataset.step));await loadFriendShelf();return;}
+    if(action==='friend-accept'||action==='friend-remove'){
+      const login=b.dataset.login,old=friendState.settings;
+      const contacts=action==='friend-accept'?[...new Set([...old.friends,login])]:old.friends.filter(n=>n!==login);
+      const blocked=action==='friend-remove'?[...new Set([...(old.blocked||[]),login])]:(old.blocked||[]).filter(n=>n!==login);
+      await api('/api/friends',{friends:contacts,blocked});if(action==='friend-remove'&&friendLogin===login)friendLogin='';await loadFriends();toast('친구 설정을 저장했어요. 다음 동기화에 반영돼요.');return;
+    }
     if(action==='knowledge-prev'||action==='knowledge-next'){knowledgeOffset=Math.max(0,knowledgeOffset+(action==='knowledge-next'?40:-40));loadKnowledge();return;}
     if(action==='shared-conflicts'){const r=await api('/api/github-sync-status');$('#shared-connections').innerHTML=r.conflicts.map(v=>`<div class="panel"><strong>분류 충돌 · ${esc(v.video_id)}</strong><p class="small muted">직접 정한 내용은 유지돼요. 아래 표기를 선택하면 직접 확인한 곡으로 저장해요.</p>${v.candidates.map(c=>`<p>${esc(c.title)} · ${esc(c.artist)} ${c.local?'(내 기존 분류)':''} <button class="button outline" data-action="shared-conflict-select" data-video-id="${v.video_id}" data-title="${esc(c.title)}" data-artist="${esc(c.artist)}">이 표기로 저장</button></p>`).join('')}</div>`).join('')||'분류 충돌이 없어요.';return;}
     if(action==='shared-conflict-select'){await api('/api/correct',{video_id:b.dataset.videoId,title:b.dataset.title,artist:b.dataset.artist});b.closest('.panel').remove();toast('직접 확인한 곡으로 저장했어요.');return;}
@@ -412,6 +443,9 @@ document.addEventListener('change',e=>{
 });
 document.addEventListener('submit',async e=>{
   e.preventDefault();try{
+    if(e.target.id==='friends-settings'){await api('/api/friends',{display_name:$('#friends-display').value,share_songs:$('#friends-share').checked});await loadFriends();toast('설정을 저장했어요. 공유 내용은 다음 동기화에 반영돼요.');}
+    if(e.target.id==='friend-add-form'){const login=$('#friend-add-login').value.trim().toLowerCase();await api('/api/friends',{friends:[...new Set([...friendState.settings.friends,login])]});await loadFriends();toast('친구를 등록했어요. 상대도 나를 추가한 뒤 동기화하면 연결돼요.');}
+    if(e.target.id==='friend-search-form'){friendQuery=$('#friend-search').value.trim();friendOffset=0;await loadFriendShelf();}
     if(e.target.id==='sharing-form'){S.github_sync=await api('/api/github-sync-config',{repo:$('#sharing-repo').value,token:$('#sharing-token').value,enabled:$('#sharing-enabled').checked});$('#sharing-token').value='';toast('공유 설정을 저장했어요. 지금 동기화할 수 있어요.');}
     if(e.target.id==='review-form'){await saveReviewInformation();}
     if(e.target.id==='number-form'){const id=e.target.dataset.id;await api('/api/number',{id,brand:$('#number-brand').value,no:$('#number-value').value});await refresh();detail(id);toast('곡 번호를 저장했어요.');}
