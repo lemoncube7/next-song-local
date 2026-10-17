@@ -31,8 +31,11 @@ def save_config(payload):
 def credential(c):
     if c.get('token'):return c['token']
     try:
-        p=subprocess.run([gh_executable(),'auth','token','--hostname','github.com'],stdin=subprocess.DEVNULL,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=8,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
-        if p.returncode==0 and p.stdout.strip():return p.stdout.strip()
+        owner=c.get('repo','').split('/')[0]
+        selectors=[['--user',owner],[]] if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,38}',owner) else [[]]
+        for selector in selectors:
+            p=subprocess.run([gh_executable(),'auth','token','--hostname','github.com',*selector],stdin=subprocess.DEVNULL,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=8,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            if p.returncode==0 and p.stdout.strip():return p.stdout.strip()
     except (OSError,subprocess.TimeoutExpired):pass
     raise ValueError('GitHub에 로그인하거나 이 비공개 저장소용 토큰을 설정하세요.')
 

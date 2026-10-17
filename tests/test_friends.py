@@ -2,7 +2,7 @@ import base64,json,sys,tempfile,threading,unittest,urllib.request,urllib.error
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import core,friends,server
+import core,friends,server,github_sync
 
 CLIENT='a'*32;PEER='b'*32;REPO='owner/private'
 def song(title='Song',artist='Artist',**extra):return {'title':title,'artist':artist,'aliases':[],'numbers':[{'brand':'tj','no':'123'}],**extra}
@@ -95,5 +95,13 @@ class FriendTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as error:urllib.request.urlopen(request)
                 self.assertEqual(error.exception.code,403)
             finally:http.shutdown();http.server_close();thread.join()
+    def test_repo_owner_credential_without_global_switch(self):
+        from types import SimpleNamespace
+        with patch('github_sync.gh_executable',return_value='gh'),patch('github_sync.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout='fake-token')) as run:
+            self.assertEqual(github_sync.credential({'repo':'owner/private'}),'fake-token')
+            self.assertEqual(run.call_args.args[0][-2:],['--user','owner'])
+        with patch('github_sync.gh_executable',return_value='gh'),patch('github_sync.subprocess.run',side_effect=[SimpleNamespace(returncode=1,stdout=''),SimpleNamespace(returncode=0,stdout='friend-token')]) as run:
+            self.assertEqual(github_sync.credential({'repo':'owner/private'}),'friend-token')
+            self.assertEqual(run.call_count,2)
 
 if __name__=='__main__':unittest.main()
