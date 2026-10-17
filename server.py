@@ -8,6 +8,7 @@ import auto_identity
 import knowledge_list
 import local_decision
 import friends
+import mobile_transfer,personal_sync
 
 TOKEN=secrets.token_urlsafe(32)
 JOB_LOCK=threading.Lock()
@@ -86,6 +87,11 @@ class Handler(BaseHTTPRequestHandler):
                     'github_sync':github_sync.public_config(),'github_sync_job':core.get_state(db,'github_sync_job',{}),'video_kind_job':core.get_state(db,'video_kind_job',{})})
             if path=='/api/github-sync-status':return self.send({'config':github_sync.public_config(),'job':core.get_state(db,'github_sync_job',{}),'conflicts':[{'video_id':r['id'],'candidates':json.loads(r['data'])} for r in db.execute('SELECT * FROM shared_conflicts LIMIT 100')]})
             if path=='/api/github-login-status':return self.send(dict(github_sync.AUTH_STATE))
+            if path=='/api/personal-sync':return self.send({'config':personal_sync.public_config(),'job':dict(personal_sync.STATE)})
+            if path=='/api/mobile-export':
+                if self.headers.get('X-App-Token')!=TOKEN:return self.send({'error':'요청 인증 실패'},403)
+                with WRITE_LOCK:result=mobile_transfer.snapshot(db,github_sync.config().get('repo',''));db.commit()
+                return self.send(result,extra={'Content-Disposition':'attachment; filename="NextSong-mobile-private.json"'})
             if path=='/api/friends':return self.send(friends.status(db,github_sync.config().get('repo','')))
             if path=='/api/friend-songs':
                 return self.send(friends.listing(db,github_sync.config().get('repo',''),q.get('login',[''])[0],q.get('q',[''])[0],
@@ -286,6 +292,13 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/friends':
                 with WRITE_LOCK:result=friends.save_settings(db,payload)
                 github_sync.notify();return self.send(result)
+            if path=='/api/mobile-apply':
+                with WRITE_LOCK:result=mobile_transfer.apply(db,payload)
+                github_sync.notify();return self.send(result)
+            if path=='/api/personal-sync-config':
+                with WRITE_LOCK:result=personal_sync.configure(db,payload)
+                personal_sync.start(WRITE_LOCK);return self.send(result)
+            if path=='/api/personal-sync-now':return self.send({'started':personal_sync.start(WRITE_LOCK)})
             with WRITE_LOCK:
                 if path=='/api/different-songs':
                     song_identity.different(db,payload.get('source',''),payload.get('target',''),payload.get('restore',False));return self.send({'ok':True})
@@ -388,6 +401,7 @@ def main():
     scan=core.connect();resume=core.get_state(scan,'recognition_job',{});scan.close()
     if resume.get('engine')==whole_recognition.VERSION and resume.get('status')=='running':start_whole_scan()
     github_sync.scheduler(WRITE_LOCK)
+    personal_sync.scheduler(WRITE_LOCK)
     auto_identity.scheduler(WRITE_LOCK,lambda:any(lock.locked() for lock in (JOB_LOCK,RECOGNITION_JOB_LOCK,REVERSE_LOCK,github_sync.SYNC_LOCK)))
     if args.open:webbrowser.open(f'http://127.0.0.1:{args.port}')
     try:server.serve_forever()
