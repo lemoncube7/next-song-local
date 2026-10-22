@@ -24,7 +24,7 @@ def snapshot(db,repo=''):
         peer.append({**p,'songs':songs})
     return {'format':FORMAT,'version':1,'source_id':sid,'created_at':datetime.now(timezone.utc).isoformat(),
             'tracks':tracks,'queue':song_identity.queue(db),'friends':peer,
-            'friend_settings':state['settings'],'account':state['account'],
+            'friend_settings':state['settings'],'account':state['account'],'official_catalogue':__import__('official_catalogue').status(db),
             'acknowledged_operations':[r[0] for r in db.execute('SELECT id FROM mobile_applied WHERE source_id=?',(sid,))]}
 
 def validate(payload):

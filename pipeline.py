@@ -124,10 +124,17 @@ def enrich_api(db, key):
             print(json.dumps({'stage':'official_metadata','done':done,'total':total}),flush=True)
         if done%(10000 if total>10000 else 250)==0:core.rebuild(db)
     core.set_state(db,'job',{'status':'complete','stage':'official_metadata','done':done,'total':total});db.commit();core.rebuild(db)
+def catalogue_cached(data):
+    try:
+        item=json.loads(data)
+        age=(datetime.now(timezone.utc)-datetime.fromisoformat(item.get('fetched_at',''))).total_seconds()
+        return item.get('status')=='ok' and 0<=age<7*86400
+    except (ValueError,TypeError):return False
+
 def query(db, kind, value, brand):
     key=kind+'|'+value+'|'+brand
     cached=db.execute('SELECT data FROM queries WHERE key=?',(key,)).fetchone()
-    if cached and json.loads(cached[0]).get('status')=='ok':return
+    if cached and catalogue_cached(cached[0]):return
     result=catalogue_request(kind,value,brand)
     for row in result.pop('rows'):
         db.execute('INSERT OR REPLACE INTO catalogue VALUES (?,?,?)',(row['brand'],str(row['no']),json.dumps(row,ensure_ascii=False)))
@@ -138,7 +145,7 @@ def karaoke(db):
     artists=sorted({t['artist'] for t in items if 1<len(t['artist'])<=100})
     jobs=[('singer',artist,brand) for artist in artists for brand in ('tj','kumyoung')]
     def run_jobs(jobs,stage):
-        fresh=[j for j in jobs if not (r:=db.execute('SELECT data FROM queries WHERE key=?',('|'.join(j),)).fetchone()) or json.loads(r[0]).get('status') not in ('ok','deferred')]
+        fresh=[j for j in jobs if not (r:=db.execute('SELECT data FROM queries WHERE key=?',('|'.join(j),)).fetchone()) or not catalogue_cached(r[0])]
         with ThreadPoolExecutor(max_workers=4) as pool:
             for offset in range(0,len(fresh),4):
                 batch=fresh[offset:offset+4]

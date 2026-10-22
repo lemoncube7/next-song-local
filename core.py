@@ -404,6 +404,8 @@ def tracks(db):
         t['karaoke_rating']=sum(votes.get(m,0) for m in t.get('member_ids',[t['id']]))
         t['karaoke_rating_score']=round(.05*t['karaoke_rating'],6)
         t['score']=round(t['base_score']+(.2 if t['followed'] else 0)+t['karaoke_good_score']+t['karaoke_rating_score'],6);result.append(t)
+    import official_catalogue
+    result=official_catalogue.overlay(db,result)
     return sorted(result,key=lambda t:(-t['score'],-t['history_records'],t['id']))
 def stats(db):
     counts=get_state(db,'classification_counts',{});items=tracks(db)

@@ -3,7 +3,7 @@ import argparse, csv, io, json, secrets, threading, traceback, urllib.parse, web
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import core, pipeline, recognition, song_identity, song_search, google_search, original_metadata, bulk_recognition, music_metadata, song_databases, user_backup, whole_recognition, reverse_catalogue, github_sync, catalogue_import, non_song, video_kind
-import app_update
+import app_update,official_catalogue
 import auto_identity
 import knowledge_list
 import local_decision
@@ -40,7 +40,7 @@ def run_job(kind):
                 if key:pipeline.enrich_api(db,key)
                 else:pipeline.enrich(db,workers=4,retry=True)
             elif kind=='catalogue':pipeline.karaoke(db)
-            elif kind=='full_catalogue':catalogue_import.run(db,WRITE_LOCK)
+            elif kind=='full_catalogue':catalogue_import.run(db,WRITE_LOCK,force=True)
             elif kind=='non_song':
                 with WRITE_LOCK:core.set_state(db,'job',{'status':'running','stage':'non_song'});db.commit()
                 result=non_song.reconcile(db,WRITE_LOCK)
@@ -96,6 +96,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/friend-songs':
                 return self.send(friends.listing(db,github_sync.config().get('repo',''),q.get('login',[''])[0],q.get('q',[''])[0],
                     max(0,int(q.get('offset',['0'])[0])),min(100,max(1,int(q.get('limit',['50'])[0])))))
+            if path=='/api/official-catalogue':return self.send(official_catalogue.status(db))
             if path=='/api/update-status':return self.send({k:v for k,v in app_update.STATE.items() if k!='stage'})
             if path=='/api/auto-identity-status':return self.send(core.get_state(db,'auto_identity_job',{'status':'idle'}))
             if path=='/api/knowledge-songs':
@@ -200,6 +201,11 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/auto-identity':
                 if JOB_LOCK.locked() or RECOGNITION_JOB_LOCK.locked() or REVERSE_LOCK.locked():return self.send({'error':'진행 중인 분류 작업이 끝나면 자동 처리해요.'},409)
                 return self.send({'started':auto_identity.start(WRITE_LOCK)})
+            if path=='/api/official-catalogue-refresh':return self.send({'started':official_catalogue.start(WRITE_LOCK)})
+            if path=='/api/official-catalogue-stop':
+                official_catalogue.STOP.set()
+                with WRITE_LOCK:core.set_state(db,'official_network_enabled',False);db.commit()
+                return self.send({'stopping':True})
             if path=='/api/update-check':
                 app_update.check();return self.send({k:v for k,v in app_update.STATE.items() if k!='stage'})
             if path=='/api/update-download':return self.send(app_update.start())
@@ -396,12 +402,14 @@ def main():
     previous=core.get_state(db,'job',{})
     if previous.get('status')=='running':
         previous.update({'status':'interrupted','reason':'이전 실행이 종료됐습니다. 저장된 결과부터 다시 조회할 수 있어요.'});core.set_state(db,'job',previous);db.commit()
+    official_catalogue.ensure(db);core.set_state(db,'official_catalogue_enabled',True);db.commit()
     core.rebuild(db);db.close()
     print(f'다음 곡: http://127.0.0.1:{args.port}',flush=True)
     scan=core.connect();resume=core.get_state(scan,'recognition_job',{});scan.close()
     if resume.get('engine')==whole_recognition.VERSION and resume.get('status')=='running':start_whole_scan()
     github_sync.scheduler(WRITE_LOCK)
     personal_sync.scheduler(WRITE_LOCK)
+    official_catalogue.scheduler(WRITE_LOCK,lambda:any(lock.locked() for lock in (JOB_LOCK,RECOGNITION_JOB_LOCK,REVERSE_LOCK)))
     auto_identity.scheduler(WRITE_LOCK,lambda:any(lock.locked() for lock in (JOB_LOCK,RECOGNITION_JOB_LOCK,REVERSE_LOCK,github_sync.SYNC_LOCK)))
     if args.open:webbrowser.open(f'http://127.0.0.1:{args.port}')
     try:server.serve_forever()

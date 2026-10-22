@@ -2,14 +2,14 @@
 import json,time,urllib.request,re
 import core
 
-def run(db,write_lock):
+def run(db,write_lock,force=False):
     folder=core.ROOT/'data'/'catalogue-pages';folder.mkdir(parents=True,exist_ok=True)
     state={'status':'running','next_page':1,'total_pages':1,'brand_counts':{}}
     with write_lock:core.set_state(db,'job',{'status':'running','stage':'full_catalogue','done':0,'total':1});db.commit()
     page=1;pages=1
     while page<=pages:
         path=folder/f'{page:03d}.json'
-        if path.exists():data=json.loads(path.read_text(encoding='utf8'))
+        if path.exists() and not force and 0<=time.time()-path.stat().st_mtime<7*86400:data=json.loads(path.read_text(encoding='utf8'))
         else:
             req=urllib.request.Request(f'https://api.manana.kr/v2/karaoke/search.json?limit=10000&page={page}',headers={'User-Agent':'NextSongLocal/1.0'})
             with urllib.request.urlopen(req,timeout=45) as response:data=json.load(response)
@@ -25,6 +25,6 @@ def run(db,write_lock):
             core.set_state(db,'job',{'status':'running','stage':'full_catalogue','done':page,'total':pages});db.commit()
         page+=1
     with write_lock:
-        state['status']='complete';core.set_state(db,'full_catalogue_job',state)
+        state['status']='complete';state['updated_at']=time.time();core.set_state(db,'full_catalogue_job',state)
         core.set_state(db,'job',{'status':'complete','stage':'full_catalogue','done':pages,'total':pages});core.rebuild(db)
     return state

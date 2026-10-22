@@ -1,4 +1,4 @@
-export const VERSION='1.0.0';
+export const VERSION='1.1.0';
 export const norm=s=>String(s??'').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
 export const uid=()=>crypto.randomUUID().replaceAll('-','');
 export function validateSnapshot(doc){
@@ -15,7 +15,7 @@ export function validateSnapshot(doc){
 export function reconcile(snapshot,pending){const acknowledged=new Set(snapshot.acknowledged_operations||[]);return pending.filter(o=>!acknowledged.has(o.id));}
 export function view(snapshot,operations,now=Date.now()){
  if(!snapshot)return {tracks:[],queue:[],friends:[],contacts:[]};
- const tracks=snapshot.tracks.map(t=>({...t,numbers:t.numbers||[],aliases:t.aliases||[],karaoke_rating:t.karaoke_rating||0}));
+ const tracks=snapshot.tracks.map(t=>({...t,numbers:(t.numbers||[]).map(n=>({...n,official_verified:!!n.official_verified&&Number.isFinite(n.checked_at)&&now-n.checked_at*1000>=0&&now-n.checked_at*1000<7*86400000})),aliases:t.aliases||[],karaoke_rating:t.karaoke_rating||0}));
  const byId=new Map(tracks.map(t=>[t.id,t]));let queue=[...snapshot.queue];let contacts=[...(snapshot.friend_settings?.friends||[])];let blocked=[...(snapshot.friend_settings?.blocked||[])];
  for(const op of operations){const t=byId.get(op.target);
   if(op.kind==='rating'&&t)t.karaoke_rating+=op.value;
