@@ -140,17 +140,18 @@ def song_keys(song):
     return {(core.norm(a['title']),core.norm(core.number_artist(a['artist']))) for a in [song]+song.get('aliases',[]) if a.get('title') and a.get('artist')}
 
 def common(local,remote):
+    from recommendation import number_key
     by_label={};by_number={}
     for song in remote:
         for key in song_keys(song):by_label.setdefault(key,[]).append(song)
-        for n in song.get('numbers',[]):by_number.setdefault((n['brand'],n['no']),[]).append(song)
+        for n in song.get('numbers',[]):by_number.setdefault(number_key(n),[]).append(song)
     out=[]
     for track in local:
         candidates={}
         for key in song_keys(track):
             for song in by_label.get(key,[]):candidates[(song['title'],song['artist'])]=(song,'곡명·아티스트 또는 별칭 일치')
         for n in track.get('numbers',[]):
-            for song in by_number.get((n['brand'],str(n['no'])),[]):
+            for song in by_number.get(number_key(n),[]):
                 candidates.setdefault((song['title'],song['artist']),(song,'노래방 번호 일치'))
         if not candidates:continue
         song,basis=next(iter(candidates.values()))
@@ -166,6 +167,7 @@ def listing(db,repo,login,query='',offset=0,limit=50):
     entry=next((p for p in state['friends'] if p['login']==name),None)
     if not entry or entry['state']!='accepted':raise ValueError('서로 친구로 등록하고 동기화한 뒤 볼 수 있어요.')
     if not entry['share_songs']:return {'songs':[],'common':[],'total':0,'reason':'친구가 곡 목록 공유를 켜지 않았어요.'}
-    songs=profiles(db,repo)[name]['songs'];shared=common(core.tracks(db),songs)
+    import recommendation
+    songs=recommendation.group_tracks(profiles(db,repo)[name]['songs']);shared=common(core.tracks(db),songs)
     if query:songs=[s for s in songs if query.casefold() in (s['title']+' '+s['artist']).casefold()]
     return {'songs':songs[offset:offset+limit],'total':len(songs),'common':shared,'reason':''}

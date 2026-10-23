@@ -396,17 +396,20 @@ def tracks(db):
     followed={canonical(a) for a in get_state(db,'follows',[],'user_state')};hidden=set(get_state(db,'hidden',[],'user_state'))
     good=set(get_state(db,'karaoke_good',[],'user_state'))
     votes=get_state(db,'karaoke_ratings',{},'user_state')
-    result=[]
-    for row in db.execute('SELECT data FROM tracks'):
-        t=json.loads(row[0]);t['followed']=canonical(t['artist']) in followed;t['hidden']=bool(hidden.intersection(t.get('member_ids',[t['id']])))
-        t['karaoke_good']=bool(good.intersection(t.get('member_ids',[t['id']]))) and not t['hidden']
-        t['karaoke_good_score']=.2 if t['karaoke_good'] else 0
-        t['karaoke_rating']=sum(votes.get(m,0) for m in t.get('member_ids',[t['id']]))
-        t['karaoke_rating_score']=round(.05*t['karaoke_rating'],6)
-        t['score']=round(t['base_score']+(.2 if t['followed'] else 0)+t['karaoke_good_score']+t['karaoke_rating_score'],6);result.append(t)
+    import recommendation
+    result=[];opens=get_state(db,'number_opens',{},'user_state')
+    raw=[json.loads(row[0]) for row in db.execute('SELECT data FROM tracks')]
+    grouped=recommendation.group_tracks(raw,list(get_state(db,'different_songs',{},'user_state').values()))
+    for t in grouped:
+        members=t.get('member_ids',[t['id']]);t['followed']=any(canonical(a['artist']) in followed for a in [t]+t.get('aliases',[]));t['hidden']=bool(hidden.intersection(members))
+        t['karaoke_good']=bool(good.intersection(members)) and not t['hidden'];t['karaoke_good_score']=.2 if t['karaoke_good'] else 0
+        t['karaoke_rating']=sum(votes.get(m,0) for m in members);t['karaoke_rating_score']=round(.05*t['karaoke_rating'],6)
+        t['number_open_count']=sum(opens.get(m,{}).get('count',0) for m in members);t['last_number_open']=max([opens.get(m,{}).get('last_opened',0) for m in members]+[0]);t['number_open_score']=recommendation.boost(t['number_open_count'])
+        t['score']=round(t['base_score']+(.2 if t['followed'] else 0)+t['karaoke_good_score']+t['karaoke_rating_score']+t['number_open_score'],6);result.append(t)
     import official_catalogue
     result=official_catalogue.overlay(db,result)
     return sorted(result,key=lambda t:(-t['score'],-t['history_records'],t['id']))
+
 def stats(db):
     counts=get_state(db,'classification_counts',{});items=tracks(db)
     video_rows=[json.loads(r[0]) for r in db.execute('SELECT data FROM videos')]

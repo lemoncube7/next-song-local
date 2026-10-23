@@ -3,7 +3,7 @@ import argparse, csv, io, json, secrets, threading, traceback, urllib.parse, web
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import core, pipeline, recognition, song_identity, song_search, google_search, original_metadata, bulk_recognition, music_metadata, song_databases, user_backup, whole_recognition, reverse_catalogue, github_sync, catalogue_import, non_song, video_kind
-import app_update,official_catalogue
+import app_update,official_catalogue,recommendation
 import auto_identity
 import knowledge_list
 import local_decision
@@ -319,6 +319,8 @@ class Handler(BaseHTTPRequestHandler):
                     if payload.get('follow',True):values=list(dict.fromkeys(values+[artist]))
                     else:values=[x for x in values if core.canonical(x)!=artist]
                     core.set_state(db,'follows',values,'user_state');db.commit();return self.send({'follows':values})
+                if path=='/api/number-open':
+                    result=recommendation.record_open(db,payload.get('id',''),payload.get('event_id',''));db.commit();return self.send(result)
                 if path=='/api/karaoke-rating':
                     tid=payload.get('id','');delta=payload.get('delta')
                     if type(delta) is not int or delta not in (-1,1):raise ValueError('평가는 +1 또는 -1이어야 합니다.')
@@ -341,10 +343,10 @@ class Handler(BaseHTTPRequestHandler):
                     key='queue' if path.endswith('queue') else 'hidden';values=core.get_state(db,key,[],'user_state')
                     if payload.get('enabled',True):values=list(dict.fromkeys(values+[tid]))
                     else:
-                        members=json.loads(db.execute('SELECT data FROM tracks WHERE id=?',(tid,)).fetchone()[0]).get('member_ids',[tid])
+                        members=next((t.get('member_ids',[tid]) for t in core.tracks(db) if t['id']==tid),[tid])
                         values=[x for x in values if x not in members]
                     if key=='hidden' and payload.get('enabled',True):
-                        members=json.loads(db.execute('SELECT data FROM tracks WHERE id=?',(tid,)).fetchone()[0]).get('member_ids',[tid])
+                        members=next((t.get('member_ids',[tid]) for t in core.tracks(db) if t['id']==tid),[tid])
                         core.set_state(db,'karaoke_good',[x for x in core.get_state(db,'karaoke_good',[],'user_state') if x not in members],'user_state')
                     core.set_state(db,key,values,'user_state');db.commit();return self.send({key:song_identity.queue(db) if key=='queue' else values})
                 if path=='/api/correct':
@@ -367,7 +369,7 @@ class Handler(BaseHTTPRequestHandler):
                     if brand not in ('tj','kumyoung','dam','joysound') or not __import__('re').fullmatch(r'[0-9]{1,8}(?:-[0-9]{1,3})?',no):raise ValueError('브랜드와 숫자로 된 곡 번호를 확인해 주세요.')
                     if not db.execute('SELECT 1 FROM tracks WHERE id=?',(tid,)).fetchone():raise ValueError('곡을 찾지 못했습니다.')
                     numbers=core.get_state(db,'numbers',{},'user_state')
-                    members=json.loads(db.execute('SELECT data FROM tracks WHERE id=?',(tid,)).fetchone()[0]).get('member_ids',[tid])
+                    members=next((t.get('member_ids',[tid]) for t in core.tracks(db) if t['id']==tid),[tid])
                     for member in members:numbers[member]=[x for x in numbers.get(member,[]) if not (x['brand']==brand and x['no']==no)]
                     values=numbers.get(tid,[])
                     item={'brand':brand,'no':no,'source':'manual','official_verified':False,'reason':'직접 확인한 번호'}

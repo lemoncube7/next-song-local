@@ -16,7 +16,7 @@ def ensure(db):
 def snapshot(db,repo=''):
     ensure(db);sid=source_id(db);tracks=[]
     for t in core.tracks(db):
-        value={k:t.get(k) for k in ('id','title','artist','aliases','numbers','history_records','last_watch','frequency_score','base_score','followed','hidden','karaoke_good','karaoke_rating')}
+        value={k:t.get(k) for k in ('id','title','artist','aliases','numbers','history_records','last_watch','frequency_score','base_score','followed','hidden','karaoke_good','karaoke_rating','member_ids','number_open_count','last_number_open')}
         value['aliases']=value['aliases'] or [];value['numbers']=value['numbers'] or [];tracks.append(value)
     state=friends.status(db,repo);peer=[]
     for p in state['friends']:
@@ -24,7 +24,7 @@ def snapshot(db,repo=''):
         peer.append({**p,'songs':songs})
     return {'format':FORMAT,'version':1,'source_id':sid,'created_at':datetime.now(timezone.utc).isoformat(),
             'tracks':tracks,'queue':song_identity.queue(db),'friends':peer,
-            'friend_settings':state['settings'],'account':state['account'],'official_catalogue':__import__('official_catalogue').status(db),
+            'friend_settings':state['settings'],'account':state['account'],'number_group_exclusions':list(core.get_state(db,'different_songs',{},'user_state').values()),'official_catalogue':__import__('official_catalogue').status(db),
             'acknowledged_operations':[r[0] for r in db.execute('SELECT id FROM mobile_applied WHERE source_id=?',(sid,))]}
 
 def validate(payload):
@@ -36,7 +36,9 @@ def validate(payload):
         if not isinstance(op,dict) or set(op)!={'id','kind','target','value'} or not isinstance(op['id'],str) or not re.fullmatch(r'[a-f0-9]{32}',op['id']):raise ValueError('변경 항목 형식 오류')
         kind=op['kind'];target=op['target'];value=op['value']
         if not isinstance(target,str) or not 1<=len(target)<=300:raise ValueError('변경 대상 오류')
-        if kind=='rating':
+        if kind=='number_open':
+            if type(value) is not int or not 0<value<=time.time()+300:raise ValueError('번호 확인 시각 오류')
+        elif kind=='rating':
             if type(value) is not int or value not in (-1,1):raise ValueError('평가 변경 값 오류')
         elif kind in ('queue','follow','friend'):
             if type(value) is not bool:raise ValueError('목록 변경 값 오류')
@@ -55,9 +57,12 @@ def apply(db,payload):
         for op in payload['operations']:
             if op['id'] in seen:result['duplicates']+=1;continue
             kind=op['kind'];target=op['target'];value=op['value']
-            if kind in ('queue','rating') and target not in ids:
+            if kind in ('queue','rating','number_open') and target not in ids:
                 result['unresolved'].append({'id':op['id'],'reason':'현재 PC 목록에 없는 곡'});continue
-            if kind=='rating':
+            if kind=='number_open':
+                import recommendation
+                recommendation.record_open(db,ids[target],op['id'],value,track=next(t for t in tracks if t['id']==ids[target]))
+            elif kind=='rating':
                 ratings=core.get_state(db,'karaoke_ratings',{},'user_state');tid=ids[target];ratings[tid]=ratings.get(tid,0)+value;core.set_state(db,'karaoke_ratings',ratings,'user_state')
             elif kind=='queue':
                 queue=song_identity.queue(db);tid=ids[target]
