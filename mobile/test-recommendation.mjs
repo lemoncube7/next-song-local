@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {groupTracks,mixRecommendations,view} from './dist/core.mjs';
+import test from 'node:test';import assert from 'node:assert/strict';import {groupTracks,mixRecommendations,view} from './client/core.mjs';
 const t=(id,no,brand='tj')=>({id,title:'Song '+id,artist:'Artist',aliases:[],numbers:[{brand,no}],history_records:10,last_watch:'2026-10-01',frequency_score:.3,base_score:.4,karaoke_rating:0});
 test('same brand and canonical number group, preserve aliases and other brand',()=>{const input=[t('b','00123'),t('a','123'),t('c','123','dam')],before=JSON.stringify(input);const groups=groupTracks(input);assert.equal(groups.length,2);assert.deepEqual(groups.find(x=>x.id==='a').member_ids.sort(),['a','b']);assert.equal(JSON.stringify(input),before);});
 test('bridges and different-song exclusions',()=>{const c=t('c','1');c.numbers.push({brand:'tj',no:'2'});const d=t('d','2');assert.equal(groupTracks([t('a','1'),t('b','2'),c,d]).length,1);assert.equal(groupTracks([t('a','1'),t('b','1')],[{source_members:['a'],target_members:['b']}]).length,2);});

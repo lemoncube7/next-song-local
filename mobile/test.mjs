@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {view,reconcile,common,matching,validateSnapshot} from './dist/core.mjs';
-import {seal,open} from './dist/vault.mjs';
+import {view,reconcile,common,matching,validateSnapshot} from './client/core.mjs';
+import {seal,open} from './client/vault.mjs';
 const base=()=>({format:'next-song-mobile',version:1,source_id:'a'.repeat(32),created_at:'2026-10-18T00:00:00Z',queue:['a'],friends:[],acknowledged_operations:[],tracks:[{id:'a',title:'Original','artist':'Artist',aliases:[{title:'번역 제목',artist:'가수'}],numbers:[{brand:'tj',no:'1'}],history_records:100,last_watch:'2025-10-18T00:00:00Z',frequency_score:.4,karaoke_rating:0},{id:'b',title:'Recent','artist':'Artist',aliases:[],numbers:[],history_records:1,last_watch:'2026-10-18T00:00:00Z',frequency_score:.1,karaoke_rating:0}]});
 test('old familiar songs retain log recency and rating changes by five points',()=>{const b=base();const now=Date.parse(b.created_at);const original=view(b,[],now).tracks.find(t=>t.id==='a');const changed=view(b,[{id:'1',kind:'rating',target:'a',value:-1}],now).tracks.find(t=>t.id==='a');assert.ok(original.score>.4);assert.ok(Math.abs(original.score-changed.score-.05)<1e-9);});
 test('operations update queue/follow without changing snapshot',()=>{const b=base();const before=JSON.stringify(b);const d=view(b,[{kind:'queue',target:'a',value:false},{kind:'queue',target:'b',value:true},{kind:'follow',target:'Artist',value:true}]);assert.deepEqual(d.queue,['b']);assert.equal(d.tracks[0].followed,true);assert.equal(JSON.stringify(b),before);});

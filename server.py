@@ -8,7 +8,7 @@ import auto_identity
 import knowledge_list
 import local_decision
 import friends
-import mobile_transfer,personal_sync
+import mobile_transfer,personal_sync,server_sync
 
 TOKEN=secrets.token_urlsafe(32)
 JOB_LOCK=threading.Lock()
@@ -87,6 +87,7 @@ class Handler(BaseHTTPRequestHandler):
                     'github_sync':github_sync.public_config(),'github_sync_job':core.get_state(db,'github_sync_job',{}),'video_kind_job':core.get_state(db,'video_kind_job',{})})
             if path=='/api/github-sync-status':return self.send({'config':github_sync.public_config(),'job':core.get_state(db,'github_sync_job',{}),'conflicts':[{'video_id':r['id'],'candidates':json.loads(r['data'])} for r in db.execute('SELECT * FROM shared_conflicts LIMIT 100')]})
             if path=='/api/github-login-status':return self.send(dict(github_sync.AUTH_STATE))
+            if path=='/api/server-status':return self.send(server_sync.status())
             if path=='/api/personal-sync':return self.send({'config':personal_sync.public_config(),'job':dict(personal_sync.STATE)})
             if path=='/api/mobile-export':
                 if self.headers.get('X-App-Token')!=TOKEN:return self.send({'error':'요청 인증 실패'},403)
@@ -189,6 +190,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(result)
             if len(data)>1024*1024:raise ValueError('요청이 너무 큽니다.')
             payload=json.loads(data or '{}')
+            if path=='/api/server-connect':return self.send(server_sync.begin())
+            if path=='/api/server-share':
+                with server_sync.LOCK:return self.send(server_sync.sync(db))
             if path=='/api/shared-reject':
                 vid=payload.get('video_id','');v=core.video_data(db,vid)
                 if not v:raise ValueError('영상을 찾지 못했습니다.')
@@ -411,6 +415,7 @@ def main():
     if resume.get('engine')==whole_recognition.VERSION and resume.get('status')=='running':start_whole_scan()
     github_sync.scheduler(WRITE_LOCK)
     personal_sync.scheduler(WRITE_LOCK)
+    server_sync.scheduler()
     official_catalogue.scheduler(WRITE_LOCK,lambda:any(lock.locked() for lock in (JOB_LOCK,RECOGNITION_JOB_LOCK,REVERSE_LOCK)))
     auto_identity.scheduler(WRITE_LOCK,lambda:any(lock.locked() for lock in (JOB_LOCK,RECOGNITION_JOB_LOCK,REVERSE_LOCK,github_sync.SYNC_LOCK)))
     if args.open:webbrowser.open(f'http://127.0.0.1:{args.port}')
